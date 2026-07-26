@@ -1,0 +1,183 @@
+name: Release
+run-name: "Release - terraform-provider-uptimekuma ${{ github.event_name == 'push' && github.ref_name || format('({0} bump)', startsWith(github.event.inputs.bump, 'major') && 'major' || startsWith(github.event.inputs.bump, 'minor') && 'minor' || 'patch') }}"
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (next tag is computed from the latest v* tag)"
+        type: choice
+        required: true
+        default: "patch (x.y.Z - bug fixes)"
+        options:
+          - "patch (x.y.Z - bug fixes)"
+          - "minor (x.Y.0 - feature)"
+          - "major (X.0.0 - breaking changes)"
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Resolve Version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: resolve
+        env:
+          BUMP: ${{ github.event.inputs.bump }}
+          PUSHED_TAG: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "push" ]; then
+            tag="$PUSHED_TAG"
+            echo "Tag comes from the pushed ref: $tag"
+          else
+            last=$(git tag -l 'v*' --sort=-v:refname | head -1)
+            last="${last:-v0.0.0}"
+            base="${last#v}"
+            base="${base%%-*}"
+            IFS='.' read -r major minor patch <<< "$base"
+            # The choice values carry a human-readable suffix ("patch (x.y.Z - ...)")
+            # because GitHub Actions has no per-option description; keep the keyword only.
+            BUMP="${BUMP%% *}"
+            case "$BUMP" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+              *) echo "::error::unknown bump '$BUMP'"; exit 1 ;;
+            esac
+            tag="v${major}.${minor}.${patch}"
+            echo "Latest tag: $last -> $BUMP bump -> $tag"
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "::error::tag $tag already exists"
+              exit 1
+            fi
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "### Release tag: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    needs: [version]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Check formatting
+        run: |
+          gofmt -l .
+          test -z "$(gofmt -l .)" || (echo "Run 'make fmt'" && exit 1)
+
+      - name: Run golangci-lint
+        run: go tool golangci-lint run ./...
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Validate documentation
+        run: go tool tfplugindocs validate --provider-name uptimekuma
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: [checks]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run unit tests
+        run: go test -race -coverpkg=./internal/... ./test/unit/...
+
+  acceptance:
+    name: Acceptance Tests (Uptime Kuma ${{ matrix.kuma_version }})
+    runs-on: ubuntu-latest
+    needs: [unit]
+    strategy:
+      # A release always runs the full matrix. No way to skip a version.
+      fail-fast: false
+      matrix:
+        kuma_version: ["2.2.1", "2.3.2", "2.4.0"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Run acceptance tests
+        env:
+          TF_ACC: "1"
+          UPTIME_KUMA_IMAGE: "louislam/uptime-kuma:${{ matrix.kuma_version }}"
+        # -p 1: each acceptance package starts its own Uptime Kuma container, and
+        # running them concurrently starves the runner into timeouts.
+        run: go test -p 1 -tags integration -timeout 900s -coverpkg=./internal/... ./test/integration/...
+
+  goreleaser:
+    name: GoReleaser
+    runs-on: ubuntu-latest
+    needs: [version, acceptance]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: git tag "$TAG"
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          echo "${{ secrets.GPG_PASSPHRASE }}" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback -s /dev/null 2>/dev/null || true
+
+      - name: Get GPG fingerprint
+        id: gpg
+        run: echo "fingerprint=$(gpg --list-secret-keys --keyid-format long | grep sec | awk '{print $2}' | cut -d'/' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_FINGERPRINT: ${{ steps.gpg.outputs.fingerprint }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}

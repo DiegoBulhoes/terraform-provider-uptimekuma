@@ -1,0 +1,144 @@
+---
+page_title: "Uptime Kuma Provider"
+description: |-
+  Terraform provider that manages Uptime Kuma monitors, tags, notifications, maintenance windows and supporting infrastructure.
+---
+
+# Uptime Kuma Provider
+
+The Uptime Kuma provider manages monitors, tags, notification channels, maintenance windows, proxies, Docker hosts, remote browsers, API keys and instance settings.
+
+## Example Usage
+
+```terraform
+terraform {
+  required_providers {
+    uptimekuma = {
+      source = "DiegoBulhoes/uptimekuma"
+    }
+  }
+}
+
+provider "uptimekuma" {
+  endpoint = "https://kuma.example.com"
+  username = "admin"
+  password = var.uptime_kuma_password
+}
+
+# Or configure it entirely from the environment:
+#
+#   export UPTIME_KUMA_URL=https://kuma.example.com
+#   export UPTIME_KUMA_USERNAME=admin
+#   export UPTIME_KUMA_PASSWORD=...
+#
+# provider "uptimekuma" {}
+
+variable "uptime_kuma_password" {
+  type      = string
+  sensitive = true
+}
+```
+
+## Authentication
+
+Configure the provider with attributes, or with environment variables:
+
+| Attribute              | Environment Variable     | Default    |
+|------------------------|--------------------------|------------|
+| `endpoint`             | `UPTIME_KUMA_URL`        | — required |
+| `username`             | `UPTIME_KUMA_USERNAME`   | — required |
+| `password`             | `UPTIME_KUMA_PASSWORD`   | — required |
+| `token`                | `UPTIME_KUMA_TOKEN`      | (empty)    |
+| `timeout`              | —                        | `30`       |
+| `max_retries`          | —                        | `3`        |
+| `insecure_skip_verify` | —                        | `false`    |
+
+When an attribute is not set, the provider falls back to the environment variable.
+
+~> **There is no API-key authentication.** Uptime Kuma's `api_key` objects only authenticate the Prometheus `/metrics` endpoint. The API this provider uses takes nothing but a username and password, so `uptimekuma_api_key` does not give Terraform another way to connect.
+
+~> **Two-factor authentication does not suit automation.** A TOTP code is single-use, so `token` has to be a fresh value on every run. Prefer an account without 2FA for Terraform.
+
+## How the provider talks to Uptime Kuma
+
+Uptime Kuma exposes **no REST API for writes**. Its only HTTP endpoints are the read-only status-page and badge routes.
+
+Everything this provider does goes over **Socket.IO**, on a long-lived authenticated connection. Three consequences are worth knowing about:
+
+- **Logins are limited to 20 per minute for the whole server.** Each Terraform command logs in once. Running many workspaces against one instance in parallel can hit the limit; the provider retries with backoff, and `max_retries` controls how hard it tries.
+
+- **Several objects have no getter event.** The server only pushes notifications, proxies, Docker hosts and remote browsers, so the provider keeps the pushed lists and reads from them.
+
+- **Updates write the whole object.** The provider builds each payload from your configuration, which makes the configuration authoritative. Fields it does not model — such as the per-monitor condition tree from the web UI — are reset when a monitor is updated.
+
+## Monitor types
+
+Each Uptime Kuma monitor type is its own resource, so only the attributes that apply to that type are available, and mistakes show up at plan time:
+
+| Resource | Uptime Kuma type |
+|---|---|
+| `uptimekuma_monitor_http` | HTTP(s) |
+| `uptimekuma_monitor_keyword` | HTTP(s) — Keyword |
+| `uptimekuma_monitor_json_query` | HTTP(s) — Json Query |
+| `uptimekuma_monitor_ping` | Ping |
+| `uptimekuma_monitor_port` | TCP Port |
+| `uptimekuma_monitor_dns` | DNS |
+| `uptimekuma_monitor_push` | Push |
+| `uptimekuma_monitor_group` | Group |
+| `uptimekuma_monitor_docker` | Docker Container |
+
+Uptime Kuma supports more types — databases, message brokers, SNMP, NTP, games and others — which are not implemented yet.
+
+## Status pages
+
+`uptimekuma_status_page` declares the page and the whole tree of groups shown on it, and `uptimekuma_status_page_incident` manages the banner pinned to the top.
+
+Two things about status pages differ from the rest of the provider:
+
+- **The slug is the identifier, not a number.** Every event addresses a page by slug, so that is the Terraform ID and what `terraform import` takes. The numeric ID is exposed as `page_id`, which is what `uptimekuma_maintenance.status_page_ids` needs.
+
+- **Reading the groups uses HTTP.** No Socket.IO event returns them, so the provider reads `GET /api/status-page/<slug>`. That route is cached for five minutes server-side; saving clears the cache, but a plain refresh can see slightly stale groups.
+
+## Known Limitations
+
+- **`uptimekuma_api_key` secrets cannot be recovered.** Uptime Kuma stores only a hash and returns the clear-text key once, at creation. An imported key has a null `key`.
+
+- **`uptimekuma_settings` is a singleton and cannot be deleted.** It adopts the current settings on create and manages only the keys you list. Destroying it leaves the values in place. The provider refuses to manage `disableAuth`, because turning it on disconnects every client, this provider included, mid-apply.
+
+- **Monitor and maintenance associations are replace-all.** `notification_ids`, `tags` and a maintenance window's `monitor_ids` are reconciled to exactly what the configuration says.
+
+- **A tag's value is part of the association's identity.** Changing the `value` of a tag on a monitor is a detach followed by an attach, not an update.
+
+- **Pausing is a separate operation.** `active` is applied through the pause and resume events, because the update event does not write that field.
+
+- **A status page's `published` flag, search-engine-index setting and password cannot be managed.** The handler that saves a page has those three assignments commented out upstream, so no API client can change them. Set them in the web UI.
+
+- **A page shows one incident at a time.** Posting an incident pins it and unpins the previous one, so two `uptimekuma_status_page_incident` resources on the same page leave only the last one visible.
+
+- **A containerized Uptime Kuma cannot run every monitor type.** The `sip-options`, `tailscale-ping` and `system-service` types are unavailable in a container. `uptimekuma_info.is_container` tells you which kind of instance you have.
+
+## Compatibility
+
+| Uptime Kuma Version | Status          |
+|---------------------|-----------------|
+| 2.4                 | Fully supported |
+| 2.3                 | Fully supported |
+| 2.2                 | Fully supported |
+| 1.x                 | Not supported   |
+
+Uptime Kuma 1.x is not supported: its API differs, and the provider is not tested against it.
+
+~> **A fresh Uptime Kuma 2.x instance needs its database chosen first.** On first boot the server stops at a database-selection step, and the real API does not exist yet. Set `UPTIME_KUMA_DB_TYPE=sqlite`, or the equivalent for your backend, on the server — or finish the step in the web UI — before you point Terraform at it.
+
+<!-- schema generated by tfplugindocs -->
+## Schema
+
+### Optional
+
+- `endpoint` (String) Base URL of the Uptime Kuma instance, for example `https://kuma.example.com`. Can also be set with the UPTIME_KUMA_URL environment variable.
+- `insecure_skip_verify` (Boolean) Skip TLS certificate verification. Useful for self-hosted instances behind a self-signed certificate. Default: false.
+- `max_retries` (Number) How many times to retry an operation that failed for a transient reason, such as a dropped connection. Default: 3.
+- `password` (String, Sensitive) Password of the Uptime Kuma account. Can also be set with the UPTIME_KUMA_PASSWORD environment variable.
+- `timeout` (Number) How long to wait, in seconds, for the server to acknowledge an operation. Default: 30.
+- `token` (String, Sensitive) Current two-factor authentication code, required only when the account has 2FA enabled. Can also be set with the UPTIME_KUMA_TOKEN environment variable. Note that a code is single-use, so 2FA accounts are a poor fit for automation.
+- `username` (String) Username of the Uptime Kuma account. Can also be set with the UPTIME_KUMA_USERNAME environment variable.

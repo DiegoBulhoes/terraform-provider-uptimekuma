@@ -1,0 +1,28 @@
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:${KUMA_VERSION:-2.4.0}
+    container_name: kuma-demo
+    ports:
+      - "${KUMA_PORT:-3001}:3001"
+    environment:
+      # Without this, Uptime Kuma 2.x boots into a database-selection screen and
+      # serves only a stub HTTP listener — the real API does not exist yet, so
+      # Terraform cannot connect. Setting the type up front skips that step.
+      UPTIME_KUMA_DB_TYPE: sqlite
+    volumes:
+      # Read-only, so the docker monitor in main.tf has a real container to
+      # watch. Drop this if you would rather not expose the socket; the docker
+      # monitor will simply report down.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - kuma-demo-data:/app/data
+    healthcheck:
+      # The handshake endpoint, not the web root: the setup-database stub answers
+      # the root too, so waiting on it would report ready too early.
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:3001/socket.io/?EIO=4&transport=polling' > /dev/null"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
+
+volumes:
+  kuma-demo-data:
