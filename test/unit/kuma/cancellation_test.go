@@ -8,13 +8,9 @@ import (
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 )
 
-// Every client method starts by getting a live session, and every one of them has
-// to give up when the caller's context is already done. A method that ignores it
-// hangs Terraform until the whole run times out, with no indication of which
-// resource is stuck — so this walks the entire surface rather than sampling it.
-//
-// The client here has never connected, so the only way any of these can return
-// nil is by not consulting the context at all.
+// A method that ignores a done context hangs Terraform until the whole run times
+// out, with no indication of which resource is stuck. This client never connected,
+// so returning nil means the context was not consulted at all.
 
 func TestNoMethodIgnoresACancelledContext(t *testing.T) {
 	t.Parallel()
@@ -22,7 +18,7 @@ func TestNoMethodIgnoresACancelledContext(t *testing.T) {
 	client := kuma.NewForHTTPTestOnly("http://127.0.0.1:1")
 
 	cases := map[string]func(context.Context) error{
-		// Reads backed by the push-only cache.
+		// Push-only cache.
 		"ListNotifications": func(ctx context.Context) error {
 			_, err := client.ListNotifications(ctx)
 			return err
@@ -56,7 +52,7 @@ func TestNoMethodIgnoresACancelledContext(t *testing.T) {
 			return err
 		},
 
-		// Reads with a getter event.
+		// With a getter event.
 		"ListMonitors": func(ctx context.Context) error {
 			_, err := client.ListMonitors(ctx)
 			return err
@@ -252,9 +248,7 @@ func TestNoMethodIgnoresACancelledContext(t *testing.T) {
 			if err == nil {
 				t.Fatal("a cancelled context must produce an error, not a silent success")
 			}
-			// Whether the cancellation surfaces as context.Canceled or wrapped in a
-			// connection error depends on where in the handshake it landed; both are
-			// honest. Only nil is a bug.
+			// context.Canceled or a wrapped connection error are both fine; nil is not.
 			if errors.Is(err, kuma.ErrNotFound) {
 				t.Errorf("a cancelled context reported as not-found would make Terraform "+
 					"delete the resource from state: %v", err)
@@ -263,8 +257,7 @@ func TestNoMethodIgnoresACancelledContext(t *testing.T) {
 	}
 }
 
-// TestGetStatusPageGroupsRejectsACancelledContext covers the one read that goes
-// over HTTP instead of Socket.IO, which has its own request path.
+// The one read that goes over HTTP, with its own request path.
 func TestGetStatusPageGroupsRejectsACancelledContext(t *testing.T) {
 	t.Parallel()
 

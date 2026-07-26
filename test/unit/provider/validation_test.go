@@ -11,23 +11,16 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-// Provider configuration that cannot connect.
+// The first errors a new user hits. Someone who found the API key setting in the
+// UI needs the diagnostic to say it does not apply to this API.
 //
-// These are the first errors a new user hits, and the only place to explain
-// something the Uptime Kuma docs do not make obvious: its Socket.IO API has no
-// API-key authentication at all. The api_key entity guards the Prometheus
-// /metrics endpoint and nothing else, so a username and password are the only way
-// in. Someone who found the API key setting in the UI needs the diagnostic to say
-// that, not just "authentication failed".
-//
-// Every attribute also falls back to an environment variable, so a test that
-// leaves one unset has to clear the variable too — otherwise it passes on a
-// machine where UPTIME_KUMA_URL happens to be exported and fails in CI.
+// Every attribute falls back to an environment variable, so these clear them —
+// otherwise the tests pass locally and fail in CI.
 
 func configureWith(t *testing.T, values map[string]tftypes.Value) fwprovider.ConfigureResponse {
 	t.Helper()
 
-	// Not parallel: t.Setenv and t.Parallel cannot be combined.
+	// Not parallel: t.Setenv forbids it.
 	for _, name := range []string{
 		"UPTIME_KUMA_URL", "UPTIME_KUMA_USERNAME", "UPTIME_KUMA_PASSWORD", "UPTIME_KUMA_TOKEN",
 	} {
@@ -119,7 +112,6 @@ func TestMissingCredentialsAreReported(t *testing.T) {
 			if !strings.Contains(errs, "username") || !strings.Contains(errs, "password") {
 				t.Errorf("the message should name both attributes: %s", errs)
 			}
-			// The part a user cannot guess.
 			if !strings.Contains(errs, "API-key") {
 				t.Errorf("the message should explain that API-key authentication does not "+
 					"apply to this API, or a user who found that setting in the UI will "+
@@ -129,9 +121,7 @@ func TestMissingCredentialsAreReported(t *testing.T) {
 	}
 }
 
-// TestEverythingMissingIsReportedAtOnce checks the diagnostics accumulate. Failing
-// on the first problem would make the user re-run to find the second, and both are
-// known before anything is contacted.
+// Both are known before anything is contacted, so report them together.
 func TestEverythingMissingIsReportedAtOnce(t *testing.T) {
 	resp := configureWith(t, nil)
 
@@ -141,9 +131,7 @@ func TestEverythingMissingIsReportedAtOnce(t *testing.T) {
 	}
 }
 
-// TestAnUnreachableEndpointIsReportedNotPanicked covers the connect failure. The
-// provider is configured once per command, so this is where a wrong URL surfaces,
-// and it has to arrive as a diagnostic rather than a crash.
+// Where a wrong URL surfaces. It has to be a diagnostic, not a crash.
 func TestAnUnreachableEndpointIsReportedNotPanicked(t *testing.T) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -152,8 +140,7 @@ func TestAnUnreachableEndpointIsReportedNotPanicked(t *testing.T) {
 	}()
 
 	resp := configureWith(t, map[string]tftypes.Value{
-		// Port 1 is closed.
-		"endpoint":    text("http://127.0.0.1:1"),
+		"endpoint":    text("http://127.0.0.1:1"), // closed port
 		"username":    text("admin"),
 		"password":    text("secret"),
 		"max_retries": tftypes.NewValue(tftypes.Number, 0),
@@ -172,8 +159,7 @@ func TestAnUnreachableEndpointIsReportedNotPanicked(t *testing.T) {
 	}
 }
 
-// TestEnvironmentVariablesSupplyTheConfiguration covers the fallback path, which is
-// how the acceptance tests and most CI setups configure the provider.
+// The fallback path, which is how the acceptance tests configure the provider.
 func TestEnvironmentVariablesSupplyTheConfiguration(t *testing.T) {
 	t.Setenv("UPTIME_KUMA_URL", "http://127.0.0.1:1")
 	t.Setenv("UPTIME_KUMA_USERNAME", "admin")
@@ -209,8 +195,7 @@ func TestEnvironmentVariablesSupplyTheConfiguration(t *testing.T) {
 		},
 	}, &resp)
 
-	// The connection still fails — nothing is listening — but the point is that it
-	// got as far as trying, which means the variables were read.
+	// The connection fails, but getting that far means the variables were read.
 	errs := errorText(resp)
 	if errs == "" {
 		t.Fatal("expected the connection to be attempted and to fail")

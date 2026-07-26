@@ -12,31 +12,15 @@ import (
 	"github.com/maldikhan/go.socket.io/socket.io/v5/client/emit"
 )
 
-// Acknowledgements a healthy server never sends.
-//
-// Every write in this package reads an ID or an object back out of the
-// acknowledgement, and each one guards against it being absent. That guard cannot
-// be reached against a real Uptime Kuma: it always answers with the row it just
-// wrote. But if it ever did not — a version skew, a handler changed upstream, a
-// proxy truncating the payload — the alternative to the guard is writing id 0 or
-// an empty object into Terraform state, which is unrecoverable without hand
-// editing the state file.
-//
-// The fake session below answers emitted events with whatever the test wants,
-// which is what makes those branches reachable.
+// Acknowledgements a healthy server never sends. Without the guards these cover,
+// the provider writes id 0 or an empty object into state.
 
-// fakeSession answers events from a table. Anything not in the table gets a bare
-// {"ok":true}, which is what most events that carry no payload reply with.
+// fakeSession answers events from a table; anything missing gets {"ok":true}.
 type fakeSession struct {
-	replies map[string]string
-	// emitErr, when set, makes Emit itself fail — the transport refusing the
-	// write rather than the server rejecting it.
-	emitErr error
-	// timeout makes the session accept the event and never acknowledge it.
-	timeout bool
-	// seen records the events emitted, in order.
-	seen []string
-	// payloads records the arguments of the last emit of each event.
+	replies  map[string]string
+	emitErr  error // the transport refusing the write, not the server rejecting it
+	timeout  bool  // accept the event and never acknowledge it
+	seen     []string
 	payloads map[string][]any
 	closed   bool
 }
@@ -65,7 +49,6 @@ func (f *fakeSession) Emit(event any, args ...any) error {
 	}
 
 	if f.timeout {
-		// The library calls this when the ack does not arrive in time.
 		if onTimeout := options.TimeoutCallback(); onTimeout != nil {
 			go func() {
 				time.Sleep(time.Millisecond)
@@ -80,8 +63,6 @@ func (f *fakeSession) Emit(event any, args ...any) error {
 		reply = `{"ok":true}`
 	}
 
-	// The provider registers func([]any); any other signature would be dropped by
-	// the library, which is the bug this shape guards against.
 	callback, ok := options.AckCallback().(func([]any))
 	if !ok {
 		return nil
@@ -95,29 +76,24 @@ func (f *fakeSession) Close() error {
 	return nil
 }
 
-// clientWith returns a client wired to a fake session, without dialing.
+// clientWith wires a client to a fake session, without dialing.
 func clientWith(t *testing.T, session kuma.SessionForTest) *kuma.Client {
 	t.Helper()
 
 	client := kuma.NewForHTTPTestOnly("http://127.0.0.1:1")
-	// Short, because a few of these deliberately never answer, and mutations wait
-	// for a pushed list the fake session does not send.
+	// Short: a few of these never answer, and mutations wait for a push.
 	client.SetTimeoutForTest(150 * time.Millisecond)
 	client.InjectSessionForTest(session)
 	return client
 }
 
-// TestWritesRejectAnAcknowledgementWithNoID covers the guard on every create.
-// Uptime Kuma confirms with ok:true and the new row's ID; without the guard an
-// answer missing the ID would be written to state as id 0, and every later
-// operation would address the wrong row.
+// Without this guard a missing ID lands in state as id 0.
 func TestWritesRejectAnAcknowledgementWithNoID(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct {
 		event string
-		// reply is an acknowledgement that succeeds but carries no ID.
-		reply string
+		reply string // succeeds, but carries no ID
 		call  func(*kuma.Client, context.Context) error
 	}{
 		"monitor": {
@@ -204,9 +180,7 @@ func TestWritesRejectAnAcknowledgementWithNoID(t *testing.T) {
 	}
 }
 
-// TestReadsRejectAnAcknowledgementWithNoObject is the read counterpart. A getter
-// that answers ok:true with no object would otherwise be reported as an empty
-// resource, and Terraform would show every attribute as changed.
+// A getter answering with no object would be read as an empty resource.
 func TestReadsRejectAnAcknowledgementWithNoObject(t *testing.T) {
 	t.Parallel()
 
@@ -259,11 +233,8 @@ func TestReadsRejectAnAcknowledgementWithNoObject(t *testing.T) {
 	}
 }
 
-// TestGetSettingsNormalizesAnAbsentDocument is the deliberate exception to the
-// rule above. Settings are a key/value store, and a server with none customized
-// legitimately answers with no data at all — that is an empty document, not a
-// failure. Returning a nil map instead would panic the first caller that indexes
-// it.
+// The exception: no settings customized is an empty document, not a failure.
+// A nil map would panic the first caller that indexes it.
 func TestGetSettingsNormalizesAnAbsentDocument(t *testing.T) {
 	t.Parallel()
 
@@ -292,9 +263,7 @@ func TestGetSettingsNormalizesAnAbsentDocument(t *testing.T) {
 	}
 }
 
-// TestCreateStatusPageRequiresASlugBack covers the same guard on the one create
-// whose identity is a slug rather than a number. An empty slug would become the
-// Terraform ID, and the resource could never be read back.
+// An empty slug would become the Terraform ID, making the page unreadable.
 func TestCreateStatusPageRequiresASlugBack(t *testing.T) {
 	t.Parallel()
 
@@ -306,8 +275,7 @@ func TestCreateStatusPageRequiresASlugBack(t *testing.T) {
 	}
 }
 
-// TestPostIncidentRequiresTheIncidentBack covers the incident write, whose ID the
-// resource needs to build its composite Terraform ID.
+// The incident's ID is half of the composite Terraform ID.
 func TestPostIncidentRequiresTheIncidentBack(t *testing.T) {
 	t.Parallel()
 
@@ -322,8 +290,7 @@ func TestPostIncidentRequiresTheIncidentBack(t *testing.T) {
 	}
 }
 
-// TestServerRejectionsSurfaceWithTheirMessage checks the ok:false path. The
-// server's own wording is the only diagnosis a user gets, so it has to survive.
+// The server's wording is the only diagnosis a user gets.
 func TestServerRejectionsSurfaceWithTheirMessage(t *testing.T) {
 	t.Parallel()
 
@@ -341,10 +308,8 @@ func TestServerRejectionsSurfaceWithTheirMessage(t *testing.T) {
 	}
 }
 
-// TestNotFoundIsRecognizedFromTheMessage pins the detection down. Uptime Kuma has
-// no distinct not-found response: a missing row makes the server dereference null
-// and report a JavaScript TypeError. Terraform depends on telling that apart from
-// a real failure — one removes the resource from state, the other must not.
+// There is no distinct not-found response: a missing row reports a JavaScript
+// TypeError. Getting this wrong drops a live resource from state.
 func TestNotFoundIsRecognizedFromTheMessage(t *testing.T) {
 	t.Parallel()
 
@@ -363,9 +328,7 @@ func TestNotFoundIsRecognizedFromTheMessage(t *testing.T) {
 	}
 }
 
-// TestAMalformedAcknowledgementIsAnError covers a reply that is not JSON at all.
-// Silence here would be the worst outcome: the caller would see a zero value and
-// treat it as a successful empty read.
+// A zero value here would be read as a successful empty response.
 func TestAMalformedAcknowledgementIsAnError(t *testing.T) {
 	t.Parallel()
 
@@ -391,9 +354,7 @@ func TestAMalformedAcknowledgementIsAnError(t *testing.T) {
 	}
 }
 
-// TestATransportFailureDropsTheSession covers the emit path failing. The session
-// has to be marked unhealthy, or every later call keeps writing into a socket
-// that is gone and the provider never recovers without a restart.
+// Without dropping the session, later calls keep writing into a dead socket.
 func TestATransportFailureDropsTheSession(t *testing.T) {
 	t.Parallel()
 
@@ -414,8 +375,7 @@ func TestATransportFailureDropsTheSession(t *testing.T) {
 	}
 }
 
-// TestATimeoutDropsTheSession covers the same recovery path for a server that
-// accepts the event and never answers.
+// Same recovery path, for a server that accepts and never answers.
 func TestATimeoutDropsTheSession(t *testing.T) {
 	t.Parallel()
 
@@ -436,10 +396,8 @@ func TestATimeoutDropsTheSession(t *testing.T) {
 	}
 }
 
-// TestWritesEmitTheEventsTheServerExpects pins the event names down. They are the
-// one thing no test can infer and no compiler can check, and two of them are
-// counter-intuitive: creating a monitor is "add", not "addMonitor", and pausing
-// goes through its own event because editMonitor never writes the active column.
+// Event names: no compiler checks these, and two are counter-intuitive —
+// creating a monitor is "add", and pausing needs its own event.
 func TestWritesEmitTheEventsTheServerExpects(t *testing.T) {
 	t.Parallel()
 
@@ -488,17 +446,14 @@ func TestWritesEmitTheEventsTheServerExpects(t *testing.T) {
 	}
 }
 
-// TestCreateAlwaysSendsTheFieldsTheServerDereferences guards the two payload
-// quirks that break creates outright: accepted_statuscodes is dereferenced with
-// no nil check, and notificationIDList must be present even when empty, because
-// omitting it is how a link removal gets lost.
+// accepted_statuscodes is dereferenced with no nil check, and omitting
+// notificationIDList is how a link removal gets lost.
 func TestCreateAlwaysSendsTheFieldsTheServerDereferences(t *testing.T) {
 	t.Parallel()
 
 	session := newFakeSession(map[string]string{"add": `{"ok":true,"monitorID":7}`})
 	client := clientWith(t, session)
 
-	// A monitor with none of those fields set by the caller.
 	if _, err := client.CreateMonitor(context.Background(), kuma.Monitor{
 		Name: "n", Type: "http", Interval: 60,
 	}); err != nil {
@@ -544,9 +499,7 @@ func TestCreateAlwaysSendsTheFieldsTheServerDereferences(t *testing.T) {
 	}
 }
 
-// TestClosingTearsDownTheSession covers Close, which has to reach the underlying
-// socket. A leaked socket keeps a login slot busy, and the server allows only 20
-// logins a minute across all clients.
+// A leaked socket keeps one of the server's 20 logins per minute busy.
 func TestClosingTearsDownTheSession(t *testing.T) {
 	t.Parallel()
 
@@ -561,13 +514,8 @@ func TestClosingTearsDownTheSession(t *testing.T) {
 	}
 }
 
-// TestMaintenancePayloadsFillTheColumnsTheServerDereferences covers the
-// normalization the client applies before every maintenance write.
-//
-// Two columns are NOT NULL with no default, and the server copies the payload
-// straight into the insert: `active`, and `dateRange`, which is indexed whatever
-// the strategy is. An unset value there fails the whole statement with a
-// constraint error that names a column the user never configured.
+// `active` and `dateRange` are NOT NULL with no default, and dateRange is
+// indexed whatever the strategy is.
 func TestMaintenancePayloadsFillTheColumnsTheServerDereferences(t *testing.T) {
 	t.Parallel()
 
@@ -626,9 +574,7 @@ func TestMaintenancePayloadsFillTheColumnsTheServerDereferences(t *testing.T) {
 	}
 }
 
-// TestMaintenanceUpdatesAreNormalizedToo guards the same fields on the edit path.
-// It is a separate call in the client, and normalizing only on create is an easy
-// asymmetry to introduce.
+// Same fields on the edit path, which is a separate call.
 func TestMaintenanceUpdatesAreNormalizedToo(t *testing.T) {
 	t.Parallel()
 

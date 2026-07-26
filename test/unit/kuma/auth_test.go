@@ -9,16 +9,8 @@ import (
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 )
 
-// The login sequence.
-//
-// Uptime Kuma limits logins to 20 per minute, server-wide, and a 2FA code is
-// single use. Both facts make the order here load-bearing: a cached JWT is tried
-// first so a reconnect neither spends a login slot needlessly nor burns a code
-// that the user can only produce once.
-//
-// None of this is observable from the outside — the public API only reports "it
-// connected" or "it did not" — so the sequence is driven directly against a fake
-// session.
+// The login sequence. Order matters: 20 logins per minute server-wide, and a 2FA
+// code works once, so a cached JWT is tried first.
 
 func authClient(t *testing.T, session kuma.SessionForTest, username, password, totp string) *kuma.Client {
 	t.Helper()
@@ -30,8 +22,7 @@ func authClient(t *testing.T, session kuma.SessionForTest, username, password, t
 	return client
 }
 
-// TestLoginStoresTheSessionToken covers the happy path. The token has to be kept,
-// or every reconnect spends another login slot.
+// The token has to be kept, or every reconnect spends another login.
 func TestLoginStoresTheSessionToken(t *testing.T) {
 	t.Parallel()
 
@@ -51,9 +42,7 @@ func TestLoginStoresTheSessionToken(t *testing.T) {
 	}
 }
 
-// TestACachedTokenIsPreferredOverThePassword is the behaviour that keeps
-// reconnects cheap. With a token in hand the password login must not happen at
-// all — the server counts it against the 20-per-minute limit either way.
+// With a token in hand, the password login must not happen at all.
 func TestACachedTokenIsPreferredOverThePassword(t *testing.T) {
 	t.Parallel()
 
@@ -76,9 +65,7 @@ func TestACachedTokenIsPreferredOverThePassword(t *testing.T) {
 	}
 }
 
-// TestARejectedTokenFallsBackToThePassword covers the recovery path. Tokens
-// expire, and the provider must not fail the run over a stale one it cached
-// itself.
+// Tokens expire; the run must not fail over a stale one we cached ourselves.
 func TestARejectedTokenFallsBackToThePassword(t *testing.T) {
 	t.Parallel()
 
@@ -104,8 +91,7 @@ func TestARejectedTokenFallsBackToThePassword(t *testing.T) {
 	}
 }
 
-// TestARejectedTokenWithNoPasswordFails covers the combination that cannot
-// recover: a stale token and nothing to fall back to.
+// A stale token with nothing to fall back to.
 func TestARejectedTokenWithNoPasswordFails(t *testing.T) {
 	t.Parallel()
 
@@ -124,9 +110,7 @@ func TestARejectedTokenWithNoPasswordFails(t *testing.T) {
 	}
 }
 
-// TestMissingCredentialsAreReportedBeforeContactingTheServer covers each partial
-// configuration. Reporting this as a login failure instead would send the user
-// looking at their Uptime Kuma logs for a problem that is in their Terraform.
+// Reported as a login failure, this sends the user to the wrong logs.
 func TestMissingCredentialsAreReportedBeforeContactingTheServer(t *testing.T) {
 	t.Parallel()
 
@@ -154,9 +138,7 @@ func TestMissingCredentialsAreReportedBeforeContactingTheServer(t *testing.T) {
 	}
 }
 
-// TestATwoFactorAccountWithoutACodeIsReportedClearly covers the tokenRequired
-// answer. The server replies ok:true with no token, so without this branch the
-// failure would surface later as an empty-token error that says nothing about 2FA.
+// The server replies ok:true with no token, which says nothing about 2FA.
 func TestATwoFactorAccountWithoutACodeIsReportedClearly(t *testing.T) {
 	t.Parallel()
 
@@ -177,8 +159,7 @@ func TestATwoFactorAccountWithoutACodeIsReportedClearly(t *testing.T) {
 	}
 }
 
-// TestATwoFactorCodeIsSentWithTheLogin checks the code reaches the payload. A
-// dropped code would look like a wrong password.
+// A dropped 2FA code looks like a wrong password.
 func TestATwoFactorCodeIsSentWithTheLogin(t *testing.T) {
 	t.Parallel()
 
@@ -208,9 +189,7 @@ func TestATwoFactorCodeIsSentWithTheLogin(t *testing.T) {
 	}
 }
 
-// TestALoginWithNoTokenBackIsAnError covers the last guard. Accepting an empty
-// token would leave the client believing it is authenticated, and every later
-// call would fail with an unrelated message.
+// An empty token leaves the client believing it is authenticated.
 func TestALoginWithNoTokenBackIsAnError(t *testing.T) {
 	t.Parallel()
 
@@ -235,9 +214,7 @@ func TestALoginWithNoTokenBackIsAnError(t *testing.T) {
 	}
 }
 
-// TestARejectedPasswordSurfacesTheServersMessage keeps the diagnosis useful. Wrong
-// password and rate limited are both ok:false, and only the message tells them
-// apart.
+// Wrong password and rate limited are both ok:false; only the message differs.
 func TestARejectedPasswordSurfacesTheServersMessage(t *testing.T) {
 	t.Parallel()
 
@@ -262,8 +239,7 @@ func TestARejectedPasswordSurfacesTheServersMessage(t *testing.T) {
 	}
 }
 
-// TestUnauthenticatedModeSkipsLoginEntirely covers the mode used to bootstrap a
-// fresh instance, where needSetup and setup work before any account exists.
+// The bootstrap mode: needSetup and setup work before any account exists.
 func TestUnauthenticatedModeSkipsLoginEntirely(t *testing.T) {
 	t.Parallel()
 
@@ -279,9 +255,8 @@ func TestUnauthenticatedModeSkipsLoginEntirely(t *testing.T) {
 	}
 }
 
-// TestRateLimitedLoginsBackOffMoreSlowly pins down the retry schedule. The limit
-// refills over a minute, so retrying on the ordinary schedule would burn every
-// attempt inside one window and fail a run that would have succeeded.
+// The limit refills over a minute, so the ordinary schedule burns every attempt
+// inside one window.
 func TestRateLimitedLoginsBackOffMoreSlowly(t *testing.T) {
 	t.Parallel()
 

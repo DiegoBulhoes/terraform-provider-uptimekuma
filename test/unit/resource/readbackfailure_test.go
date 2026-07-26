@@ -12,18 +12,9 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-// The read-back after a write.
-//
-// Create and Update both write, then read the object back to fill in whatever the
-// server computed — a derived cron expression, a monitor's own URL, the push
-// token. If that read fails the operation has to fail too, even though the write
-// itself succeeded.
-//
-// It is tempting to ignore the error and keep the plan values instead, since the
-// object does exist by then. That is the worse outcome: the state would record
-// values the server never confirmed, and every later plan would diff against
-// them. Failing leaves the object present with a tainted resource, which the next
-// apply reconciles.
+// Create and Update read the object back for whatever the server computed. If
+// that read fails, keeping the plan values would record what the server never
+// confirmed — every later plan would diff against it.
 
 func TestCreateFailsWhenTheReadBackFails(t *testing.T) {
 	t.Parallel()
@@ -149,11 +140,8 @@ func TestUpdateFailsWhenTheReadBackFails(t *testing.T) {
 	})
 }
 
-// TestAnObjectDeletedBetweenTheWriteAndTheReadBackIsReported covers the narrow
-// race where someone removes the object in the window between the two calls. It
-// has to be an error rather than a silent removal from state: the apply did
-// create something, and reporting success with no resource would leave the user
-// with no way to see what happened.
+// The race where someone removes the object between the two calls. The apply did
+// create something, so reporting success with no resource hides that.
 func TestAnObjectDeletedBetweenTheWriteAndTheReadBackIsReported(t *testing.T) {
 	t.Parallel()
 
@@ -171,13 +159,8 @@ func TestAnObjectDeletedBetweenTheWriteAndTheReadBackIsReported(t *testing.T) {
 	}
 }
 
-// TestTagReconciliationHandlesEveryTransition covers the set arithmetic that keeps
-// a monitor's tags in sync. Uptime Kuma has no "replace all tags" event, so the
-// resource computes the difference and issues one add or delete per change.
-//
-// The interesting part is what must NOT happen: a tag present in both plan and
-// state has to be left alone. Removing and re-adding it would work, but the tag
-// link carries a value, and the round trip would drop it.
+// There is no "replace all tags" event, so the resource diffs and issues one call
+// per change. A tag in both plan and state has to be left alone.
 func TestTagReconciliationHandlesEveryTransition(t *testing.T) {
 	t.Parallel()
 
@@ -207,8 +190,7 @@ func TestTagReconciliationHandlesEveryTransition(t *testing.T) {
 
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
 		client.EXPECT().UpdateMonitor(gomock.Any(), gomock.Any()).Return(nil)
-		// No AddMonitorTag and no DeleteMonitorTag: GoMock fails the test if either
-		// is called, which is the assertion.
+		// No tag calls expected: GoMock fails if either happens.
 		client.EXPECT().GetMonitor(gomock.Any(), 7).Return(&kuma.Monitor{
 			ID: 7, Name: "api", Type: "http", URL: ptrTo("https://example.com"),
 			Interval: 60, Active: kuma.BoolPtr(true),
@@ -261,8 +243,7 @@ func TestTagReconciliationHandlesEveryTransition(t *testing.T) {
 	t.Run("changing only the value re-links the tag", func(t *testing.T) {
 		t.Parallel()
 
-		// The link is identified by tag ID and value together, so a new value is a
-		// different link: the old one goes and a new one arrives.
+		// The link is identified by tag ID and value, so a new value is a new link.
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
 		client.EXPECT().UpdateMonitor(gomock.Any(), gomock.Any()).Return(nil)
 		client.EXPECT().DeleteMonitorTag(gomock.Any(), 1, 7, "staging").Return(nil)

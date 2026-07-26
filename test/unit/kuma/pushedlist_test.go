@@ -11,17 +11,10 @@ import (
 	"github.com/maldikhan/go.socket.io/socket.io/v5/client/emit"
 )
 
-// Lists that only ever arrive by push.
-//
-// Notifications, proxies, Docker hosts and remote browsers have no getter event.
-// The server sends each list after login and again after every mutation, and this
-// package caches them. That makes reading one of these a wait rather than a
-// request, and the wait has to end: without a timeout a resource whose push never
-// arrives hangs the whole Terraform run with no indication of which one.
+// Notifications, proxies, Docker hosts and remote browsers have no getter event,
+// so reading one is a wait rather than a request. The wait has to end.
 
-// TestReadingAPushOnlyListTimesOutRatherThanHanging covers the deadline. The fake
-// session answers the reconnect but never pushes anything, which is what a server
-// that dropped the subscription looks like.
+// What a server that dropped the subscription looks like.
 func TestReadingAPushOnlyListTimesOutRatherThanHanging(t *testing.T) {
 	t.Parallel()
 
@@ -48,8 +41,7 @@ func TestReadingAPushOnlyListTimesOutRatherThanHanging(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			// A client that cannot reconnect: the reconnect is how this package asks
-			// the server to resend a list it has no getter for.
+			// A reconnect is how this package asks for a list it has no getter for.
 			client := kuma.NewForHTTPTestOnly("http://127.0.0.1:1")
 			client.SetTimeoutForTest(100 * time.Millisecond)
 
@@ -69,9 +61,7 @@ func TestReadingAPushOnlyListTimesOutRatherThanHanging(t *testing.T) {
 	}
 }
 
-// TestAPushOnlyListIsServedFromTheCacheOnceLoaded is the other half. Once a list
-// has arrived, a read must not wait again — every resource of that type reads it
-// during a plan, and one round trip each would be slow for no reason.
+// Every resource of that type reads this during a plan; one wait each is enough.
 func TestAPushOnlyListIsServedFromTheCacheOnceLoaded(t *testing.T) {
 	t.Parallel()
 
@@ -93,10 +83,8 @@ func TestAPushOnlyListIsServedFromTheCacheOnceLoaded(t *testing.T) {
 	}
 }
 
-// TestInvalidatingACacheForcesAReload covers the path a reconnect takes. The
-// cached lists are dropped when a session is replaced, because anything could have
-// changed while the connection was gone — and reloading them has to be possible,
-// which is a bug this package already had once.
+// A replaced session drops the cached lists, and reloading them has to work —
+// this package got that wrong once.
 func TestInvalidatingACacheForcesAReload(t *testing.T) {
 	t.Parallel()
 
@@ -111,17 +99,14 @@ func TestInvalidatingACacheForcesAReload(t *testing.T) {
 	client.InvalidateCachesForTest()
 	client.SetTimeoutForTest(100 * time.Millisecond)
 
-	// With the cache dropped and no push coming, this must fail rather than
-	// return the stale contents or an empty list.
+	// Must fail rather than return stale contents or an empty list.
 	if _, err := client.ListNotifications(context.Background()); err == nil {
 		t.Error("after invalidation the list has to be refetched, and a failure to " +
 			"do so must surface")
 	}
 }
 
-// TestAGetterBackedListReportsItsFailure covers the branch for the lists that do
-// have a getter event. There the refresh is a request, and its failure is what has
-// to surface.
+// For the lists with a getter, the refresh is a request that can fail.
 func TestAGetterBackedListReportsItsFailure(t *testing.T) {
 	t.Parallel()
 
@@ -168,10 +153,8 @@ func TestAGetterBackedListReportsItsFailure(t *testing.T) {
 	}
 }
 
-// TestADegenerateAcknowledgementIsAnError covers the two shapes the ack decoder
-// cannot make sense of. The library hands the callback whatever arrived, and a
-// silent mis-decode here is how an entity turns invisible: the caller sees a zero
-// value and treats it as "does not exist".
+// A silent mis-decode here makes an entity invisible: the caller sees a zero
+// value and reads it as "does not exist".
 func TestADegenerateAcknowledgementIsAnError(t *testing.T) {
 	t.Parallel()
 
@@ -206,9 +189,7 @@ func TestADegenerateAcknowledgementIsAnError(t *testing.T) {
 	})
 }
 
-// TestACancelledContextInterruptsAWaitingCall covers giving up while the
-// acknowledgement is still outstanding, which is what happens when the user
-// interrupts Terraform.
+// Giving up while the acknowledgement is still outstanding.
 func TestACancelledContextInterruptsAWaitingCall(t *testing.T) {
 	t.Parallel()
 
@@ -239,10 +220,7 @@ func TestACancelledContextInterruptsAWaitingCall(t *testing.T) {
 	}
 }
 
-// findAckCallback digs the ack callback out of the emit options. The provider
-// registers func([]any) deliberately: any other signature takes the library's
-// reflection path, which requires every argument to be json.RawMessage and
-// silently drops the callback when it is not.
+// findAckCallback digs the ack callback out of the emit options.
 func findAckCallback(args []any) func([]any) {
 	options := &emit.EmitOptions{}
 	for _, arg := range args {
@@ -254,8 +232,7 @@ func findAckCallback(args []any) func([]any) {
 	return callback
 }
 
-// degenerateSession produces acknowledgements the decoder has to reject, which a
-// real server never sends.
+// degenerateSession produces acknowledgements the decoder has to reject.
 type degenerateSession struct{ mode ackMode }
 
 type ackMode int
@@ -278,7 +255,6 @@ func (d *degenerateSession) Emit(_ any, args ...any) error {
 		// A string where the library normally passes json.RawMessage.
 		go callback([]any{"not raw json"})
 	case neverAnswers:
-		// Deliberately nothing.
 	}
 	return nil
 }

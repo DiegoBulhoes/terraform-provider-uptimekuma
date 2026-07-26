@@ -8,27 +8,15 @@ import (
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 )
 
-// Regression tests for a panic found while covering the cancellation paths:
-// connectLocked derived the connection context from c.baseCtx with
-// context.WithCancel, which panics when handed a nil parent. A client assembled
-// without a base context therefore crashed the provider process on its first
-// dial instead of returning an error.
-//
-// A panic in a Terraform provider is worse than an error. The plugin dies, the
-// framework reports a crash with no resource address, and any operation already
-// in flight is left half-applied with nothing written to state.
-//
-// Two things are pinned down here: dialing without a base context now fails
-// instead of panicking, and no constructor produces a client in that shape in the
-// first place. The second is the one that keeps the bug from coming back — the
-// first only stops it from being fatal.
+// context.WithCancel(nil) panics, so a client with no base context used to kill
+// the plugin process on its first dial. A panic leaves the operation half-applied
+// with nothing in state.
 
-// TestDialingWithoutABaseContextFailsInsteadOfPanicking is the direct regression
-// test. Before the fix this call panicked inside context.WithCancel.
+// The direct regression: this used to panic inside context.WithCancel.
 func TestDialingWithoutABaseContextFailsInsteadOfPanicking(t *testing.T) {
 	t.Parallel()
 
-	// Port 1 is closed, so the dial fails — the point is *how* it fails.
+	// Port 1 is closed; the point is *how* the dial fails.
 	client := kuma.NewWithoutBaseContextForTest("http://127.0.0.1:1")
 
 	defer func() {
@@ -44,10 +32,8 @@ func TestDialingWithoutABaseContextFailsInsteadOfPanicking(t *testing.T) {
 	}
 }
 
-// TestEveryClientMethodSurvivesAMissingBaseContext widens the guarantee past the
-// one method above. Every entry point reaches the dial through session(), so any
-// of them could have been the first to hit it — the panic was found through
-// DeleteStatusPage, not ListMonitors.
+// Every entry point reaches the dial through session(); the panic was found
+// through DeleteStatusPage, not ListMonitors.
 func TestEveryClientMethodSurvivesAMissingBaseContext(t *testing.T) {
 	t.Parallel()
 
@@ -96,11 +82,7 @@ func TestEveryClientMethodSurvivesAMissingBaseContext(t *testing.T) {
 	}
 }
 
-// TestEveryClientHasABaseContext is the root-cause test. The panic was possible
-// because a client could be assembled without a base context at all; this asserts
-// the constructor never leaves one out, whatever configuration it is given.
-//
-// A constructor added later that forgets the field fails here rather than
+// The root cause: a constructor that forgets the field fails here rather than
 // panicking in production.
 func TestEveryClientHasABaseContext(t *testing.T) {
 	t.Parallel()
@@ -136,10 +118,8 @@ func TestEveryClientHasABaseContext(t *testing.T) {
 	}
 }
 
-// TestTheBaseContextOutlivesTheCallersContext covers why the field exists. The
-// socket has to stay up between Terraform operations, so it is deliberately
-// detached from the context of the call that opened it. Deriving it directly from
-// the caller would tear the connection down after the first resource.
+// Why the field exists: deriving it from the caller would tear the connection
+// down after the first resource.
 func TestTheBaseContextOutlivesTheCallersContext(t *testing.T) {
 	t.Parallel()
 
@@ -156,19 +136,14 @@ func TestTheBaseContextOutlivesTheCallersContext(t *testing.T) {
 		t.Fatal("the base context disappeared")
 	}
 
-	// Cancelling the constructor's context must not, by itself, be what stops a
-	// later call. This one fails because the port is closed, and the distinction
-	// matters: a cancelled base context would report the same way while actually
-	// meaning the connection can never be reopened.
+	// This fails because the port is closed, not because the context was cancelled.
 	if _, err := client.ListMonitors(context.Background()); err == nil {
 		t.Error("expected a connection failure against a closed port")
 	}
 }
 
-// TestAnEmptyEndpointIsRejectedBeforeDialing pins the other guard in the
-// constructor. Without it the failure surfaces much later, as an unparseable URL
-// during a dial, which reads like a network problem rather than missing
-// configuration.
+// Without this the failure surfaces as an unparseable URL during a dial, which
+// reads like a network problem.
 func TestAnEmptyEndpointIsRejectedBeforeDialing(t *testing.T) {
 	t.Parallel()
 
@@ -181,9 +156,7 @@ func TestAnEmptyEndpointIsRejectedBeforeDialing(t *testing.T) {
 	}
 }
 
-// TestTheConstructorNormalizesTimeoutAndRetries covers the remaining defaults it
-// applies. A zero timeout would make every RPC give up immediately; negative
-// retries would make the retry loop behave unpredictably.
+// A zero timeout makes every RPC give up immediately.
 func TestTheConstructorNormalizesTimeoutAndRetries(t *testing.T) {
 	t.Parallel()
 

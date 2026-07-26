@@ -9,16 +9,9 @@ import (
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 )
 
-// The custom WebSocket used before it has dialed.
-//
 // This transport exists because the library's built-in one hardcodes the default
-// TLS config, which makes self-signed certificates unusable — and those are the
-// norm on self-hosted Uptime Kuma. Replacing it means owning the lifecycle,
-// including the window before Dial where the connection is nil.
-//
-// Reading or writing then has to return an error. Dereferencing the nil
-// connection instead would panic, and a panic in a provider kills the plugin
-// process and reports a crash with no resource address.
+// TLS config, which rules out self-signed certificates. Owning it means owning the
+// window before Dial, where the connection is nil and a dereference would panic.
 
 func TestUsingTheWebSocketBeforeDialingIsAnErrorNotAPanic(t *testing.T) {
 	t.Parallel()
@@ -53,9 +46,8 @@ func TestUsingTheWebSocketBeforeDialingIsAnErrorNotAPanic(t *testing.T) {
 	}
 }
 
-// TestClosingAnUndialedWebSocketSucceeds is the deliberate asymmetry. Close runs
-// on teardown paths that cannot know whether the dial ever happened — a failed
-// connect closes the socket it never opened — so it has to be safe to call.
+// The deliberate asymmetry: Close runs on teardown paths that cannot know whether
+// the dial happened, so it has to be safe to call.
 func TestClosingAnUndialedWebSocketSucceeds(t *testing.T) {
 	t.Parallel()
 
@@ -64,13 +56,13 @@ func TestClosingAnUndialedWebSocketSucceeds(t *testing.T) {
 	if err := socket.Close(); err != nil {
 		t.Errorf("closing a socket that never dialed should be a no-op, got: %s", err)
 	}
-	// Twice, because teardown paths can overlap.
+	// Twice: teardown paths can overlap.
 	if err := socket.Close(); err != nil {
 		t.Errorf("closing twice should stay a no-op, got: %s", err)
 	}
 }
 
-// TestDialingAnInvalidURLFails covers the error path of Dial itself.
+// The error path of Dial itself.
 func TestDialingAnInvalidURLFails(t *testing.T) {
 	t.Parallel()
 
@@ -81,8 +73,7 @@ func TestDialingAnInvalidURLFails(t *testing.T) {
 	}
 }
 
-// TestDialingAClosedPortFails covers the other half: a well-formed URL with
-// nothing listening.
+// A well-formed URL with nothing listening.
 func TestDialingAClosedPortFails(t *testing.T) {
 	t.Parallel()
 
@@ -92,17 +83,14 @@ func TestDialingAClosedPortFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a connection failure")
 	}
-	// And the socket must still be usable as a value afterwards, not left in a
-	// state where Close panics.
+	// Close must still be safe afterwards.
 	if closeErr := socket.Close(); closeErr != nil && !errors.Is(closeErr, err) {
 		t.Logf("close after a failed dial: %s", closeErr)
 	}
 }
 
-// TestTheHTTPClientCarriesTheTLSConfig covers the polling transport's client.
-// The Engine.IO handshake happens over long polling before the upgrade to
-// WebSocket, so a self-signed instance fails at the handshake unless this client
-// gets the same TLS config.
+// The Engine.IO handshake runs over long polling before the WebSocket upgrade, so
+// this client needs the same TLS config.
 func TestTheHTTPClientCarriesTheTLSConfig(t *testing.T) {
 	t.Parallel()
 
@@ -126,8 +114,7 @@ func TestTheHTTPClientCarriesTheTLSConfig(t *testing.T) {
 	}
 }
 
-// TestTheHTTPClientIsIndependentOfTheDefault guards against configuring the
-// shared default transport, which would apply the provider's TLS settings to
+// Configuring the shared default transport would apply these TLS settings to
 // every other HTTP client in the process.
 func TestTheHTTPClientIsIndependentOfTheDefault(t *testing.T) {
 	t.Parallel()

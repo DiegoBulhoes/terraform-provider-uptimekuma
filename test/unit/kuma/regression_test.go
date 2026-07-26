@@ -12,32 +12,10 @@ import (
 	"github.com/maldikhan/go.socket.io/socket.io/v5/client/emit"
 )
 
-// Regression tests for three failures that cost real debugging time on this
-// project. Each one was silent: nothing crashed, nothing logged, the provider
-// simply did the wrong thing.
-//
-// They are grouped here because none of them belongs to a single method. Each is a
-// property of the package as a whole, and each would come back the same way — as a
-// small, reasonable-looking edit somewhere else.
+// Regressions. Each was silent, so each test names what breaks.
 
-// ── The ack callback signature ──────────────────────────────────────
-
-// TestTheAckCallbackSignatureIsTheOneTheLibraryInvokes is the regression test for
-// the failure that took longest to find.
-//
-// go.socket.io accepts `any` as its ack callback and picks how to invoke it by
-// reflecting on the actual type. Exactly one signature is handed the raw
-// arguments: func([]any). Everything else goes down a reflection path that
-// requires every argument to be a json.RawMessage, and when that does not hold the
-// library **drops the callback without a word**.
-//
-// The connect handler was written as func(any). Nothing failed. Nothing logged.
-// The provider waited for an acknowledgement that would never be delivered, and
-// every operation timed out with a message about the server not answering.
-//
-// This test reflects on what the package actually passes to emit.WithAck and fails
-// if it is anything but func([]any), naming the consequence — because the
-// alternative is another afternoon spent looking at the server.
+// go.socket.io only invokes func([]any) directly; any other signature takes its
+// reflection path and gets dropped without a word.
 func TestTheAckCallbackSignatureIsTheOneTheLibraryInvokes(t *testing.T) {
 	t.Parallel()
 
@@ -46,8 +24,7 @@ func TestTheAckCallbackSignatureIsTheOneTheLibraryInvokes(t *testing.T) {
 	client.SetTimeoutForTest(150 * time.Millisecond)
 	client.InjectSessionForTest(inspector)
 
-	// The inspector records the options and never answers, so the call is ended by
-	// the context rather than by an acknowledgement.
+	// The inspector never answers, so the context ends the call.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	_, _ = client.GetMonitor(ctx, 1)
@@ -68,9 +45,7 @@ func TestTheAckCallbackSignatureIsTheOneTheLibraryInvokes(t *testing.T) {
 	}
 }
 
-// TestTheTimeoutCallbackIsRegisteredToo covers the other half of the same emit.
-// Without it a server that accepts an event and never answers leaves the call
-// waiting on a channel nothing will ever write to.
+// Without a timeout callback, an unanswered event waits forever.
 func TestTheTimeoutCallbackIsRegisteredToo(t *testing.T) {
 	t.Parallel()
 
@@ -95,7 +70,7 @@ func TestTheTimeoutCallbackIsRegisteredToo(t *testing.T) {
 	}
 }
 
-// signatureInspector records the emit options rather than answering them.
+// signatureInspector records the emit options instead of answering.
 type signatureInspector struct {
 	callback        any
 	timeout         func()
@@ -117,23 +92,11 @@ func (s *signatureInspector) Emit(_ any, args ...any) error {
 
 func (s *signatureInspector) Close() error { return nil }
 
-// ── omitempty as a compatibility requirement ────────────────────────
-
-// TestOptionalMonitorFieldsAreOmittedNotNulled is the regression test for
-// "table monitor has no column named bearer_token" on Uptime Kuma 2.2 and 2.3.
-//
-// On create the server hands the payload to bean.import(), which turns every key
-// present into a column in the INSERT. A key the running version does not have
-// fails the whole statement — so sending "bearer_token": null to 2.2 breaks a
-// monitor that has nothing to do with bearer tokens.
-//
-// The fix is `omitempty` on every optional field, which makes one payload work
-// across 2.2 to 2.4. It is invisible in review: a new field added without the tag
-// works perfectly against the newest version and breaks every older one.
+// bean.import() turns every key present into a column in the INSERT, so a key
+// the running version lacks fails the whole statement.
 func TestOptionalMonitorFieldsAreOmittedNotNulled(t *testing.T) {
 	t.Parallel()
 
-	// A monitor with only what an HTTP check needs.
 	monitor := kuma.Monitor{
 		Name:     "minimal",
 		Type:     "http",
@@ -152,8 +115,6 @@ func TestOptionalMonitorFieldsAreOmittedNotNulled(t *testing.T) {
 		t.Fatalf("decoding: %s", err)
 	}
 
-	// Any key present with a null value is a column name sent to the server for no
-	// reason, and one the running version may not have.
 	for key, value := range sent {
 		if value == nil {
 			t.Errorf("%q was sent as null. On create the server turns every key into a "+
@@ -162,12 +123,8 @@ func TestOptionalMonitorFieldsAreOmittedNotNulled(t *testing.T) {
 		}
 	}
 
-	// Fields added in later releases, spot-checked by name so the failure says
-	// which one would break.
-	//
-	// `conditions` is deliberately not here: the handler JSON.stringify's it
-	// unconditionally, so NormalizeMonitor fills it with an empty array for the
-	// same reason accepted_statuscodes is filled in — the server dereferences it.
+	// `conditions` is excluded: the handler stringifies it unconditionally, so
+	// NormalizeMonitor always fills it.
 	for _, laterAddition := range []string{
 		"bearer_token", "snmpOid", "snmpVersion", "rabbitmqNodes",
 		"kafkaProducerBrokers", "remote_browser", "screenshot_delay",
@@ -179,10 +136,7 @@ func TestOptionalMonitorFieldsAreOmittedNotNulled(t *testing.T) {
 	}
 }
 
-// TestRequiredMonitorFieldsAreAlwaysSent is the counterpart, and the reason
-// `omitempty` cannot simply be applied to everything. These six the server
-// dereferences or constrains, so omitting them is its own failure — documented one
-// by one in CLAUDE.md.
+// Why `omitempty` cannot go on everything: the server dereferences these six.
 func TestRequiredMonitorFieldsAreAlwaysSent(t *testing.T) {
 	t.Parallel()
 
@@ -213,9 +167,7 @@ func TestRequiredMonitorFieldsAreAlwaysSent(t *testing.T) {
 	}
 }
 
-// TestOptionalFieldsAreOmittedForEveryMonitorType widens the guarantee past HTTP.
-// Each type sets a different subset, and a field belonging to one type must not
-// ride along on the others.
+// Each type sets a different subset; none may ride along on the others.
 func TestOptionalFieldsAreOmittedForEveryMonitorType(t *testing.T) {
 	t.Parallel()
 
@@ -246,29 +198,13 @@ func TestOptionalFieldsAreOmittedForEveryMonitorType(t *testing.T) {
 	}
 }
 
-// TestOptionalFieldsAreOmittedForTheOtherEntities covers the payloads built from
-// database rows, which have the same constraint for the same reason.
-//
-// A handful of fields are exempt, and the exemptions are the interesting part.
-// Two documented rules pull in opposite directions here:
-//
-//   - Optional fields need `omitempty`, because the server turns every key present
-//     into a column in its INSERT.
-//   - Payloads are built from the plan rather than merged onto the server's copy,
-//     because a removed attribute has to reach the server as null — omitting it
-//     writes the old value straight back.
-//
-// For a field whose value a user can clear, the second rule wins: sending null is
-// the only way to empty it. That is safe precisely for the fields below, which have
-// existed since 1.x, so no supported version is missing the column.
-//
-// The list is closed on purpose. A new optional field added without `omitempty`
-// fails this test, and whoever adds it has to decide which rule applies rather than
-// inheriting an exemption by accident.
+// The exemptions are the point: a field a user can clear has to be sent as null,
+// which beats `omitempty` for those. The list is closed, so a new field without
+// the tag fails here.
 func TestOptionalFieldsAreOmittedForTheOtherEntities(t *testing.T) {
 	t.Parallel()
 
-	// field -> why null has to be sent instead of the key being omitted.
+	// field -> why null, not omission.
 	nullable := map[string]string{
 		"username": "clearing a proxy's credentials means sending null; omitting it would " +
 			"write the old user back",
@@ -312,7 +248,6 @@ func TestOptionalFieldsAreOmittedForTheOtherEntities(t *testing.T) {
 					"to clear it.", key)
 			}
 
-			// id is assigned by the server on create and must not be sent as 0.
 			if id, present := sent["id"]; present {
 				if number, isNumber := id.(float64); isNumber && number == 0 {
 					t.Error("id was sent as 0 on a create; it has to be omitted so the " +
@@ -323,9 +258,7 @@ func TestOptionalFieldsAreOmittedForTheOtherEntities(t *testing.T) {
 	}
 }
 
-// TestTheNullableFieldsCanActuallyBeCleared is what earns those exemptions. If a
-// value could not be cleared through the provider, sending null would be pointless
-// and `omitempty` would be the better choice.
+// What earns those exemptions: the values really can be cleared.
 func TestTheNullableFieldsCanActuallyBeCleared(t *testing.T) {
 	t.Parallel()
 
@@ -335,7 +268,7 @@ func TestTheNullableFieldsCanActuallyBeCleared(t *testing.T) {
 		session := newFakeSession(map[string]string{"addProxy": `{"ok":true,"id":2}`})
 		client := clientWith(t, session)
 
-		// A proxy that had authentication and no longer does.
+		// Had authentication, no longer does.
 		id := 2
 		if _, err := client.SaveProxy(context.Background(), &id, kuma.Proxy{
 			Host: "h", Port: 8080, Protocol: "http", Auth: kuma.Bool(false),
@@ -398,16 +331,7 @@ func TestTheNullableFieldsCanActuallyBeCleared(t *testing.T) {
 	})
 }
 
-// ── The shared session pool ─────────────────────────────────────────
-
-// TestSharedSessionsAreReusedForTheSameConfiguration is the regression test for
-// the login rate limit.
-//
-// Uptime Kuma allows 20 logins per minute for the whole server, and every client
-// construction spends one. Terraform configures a provider instance per command,
-// and the acceptance framework does it several times per step — which is how a
-// test run started failing with "Too frequently, try again later" on a server
-// nobody else was using.
+// 20 logins per minute, server-wide, and every client construction spends one.
 func TestSharedSessionsAreReusedForTheSameConfiguration(t *testing.T) {
 	kuma.ResetPoolForTest()
 	t.Cleanup(kuma.ResetPoolForTest)
@@ -418,13 +342,10 @@ func TestSharedSessionsAreReusedForTheSameConfiguration(t *testing.T) {
 		Password: "secret",
 	}
 
-	// Stand in for a session a first connection established.
 	seeded := kuma.NewForHTTPTestOnly(cfg.Endpoint)
 	kuma.SeedPoolForTest(cfg, seeded)
 
-	// A second configuration with the same values must get that session back
-	// rather than opening another. If it dialed instead, this would fail: nothing
-	// is listening on port 1.
+	// Nothing listens on port 1, so dialing instead of reusing would fail here.
 	got, err := kuma.Shared(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("an identical configuration should reuse the open session, not dial: %s", err)
@@ -435,9 +356,7 @@ func TestSharedSessionsAreReusedForTheSameConfiguration(t *testing.T) {
 	}
 }
 
-// TestSharedSessionsAreNotReusedWhenTheCredentialsChange is the limit of the
-// optimization. Reuse is keyed on the credentials, so rotating a password forces a
-// fresh login instead of quietly continuing on a session opened with the old one.
+// Rotating a password has to force a fresh login.
 func TestSharedSessionsAreNotReusedWhenTheCredentialsChange(t *testing.T) {
 	t.Parallel()
 
@@ -466,9 +385,7 @@ func TestSharedSessionsAreNotReusedWhenTheCredentialsChange(t *testing.T) {
 	}
 }
 
-// TestSharedSessionsMatchOnEverythingThatMatters is the other direction: two
-// configurations that differ only in something the session does not depend on
-// should still share it, or the rate limit comes back.
+// Differing in something the session does not depend on must still share it.
 func TestSharedSessionsMatchOnEverythingThatMatters(t *testing.T) {
 	t.Parallel()
 
@@ -498,10 +415,7 @@ func TestSharedSessionsMatchOnEverythingThatMatters(t *testing.T) {
 	}
 }
 
-// TestAFailedConnectionIsNotPooled covers the case that would be worse than no
-// pooling at all: caching a client whose login failed would hand the same broken
-// session to every later caller, and the run would fail with an error about
-// something that has since been fixed.
+// Caching a failed login would hand the same broken session to every caller.
 func TestAFailedConnectionIsNotPooled(t *testing.T) {
 	kuma.ResetPoolForTest()
 	t.Cleanup(kuma.ResetPoolForTest)
@@ -518,8 +432,6 @@ func TestAFailedConnectionIsNotPooled(t *testing.T) {
 		t.Fatal("connecting to a closed port should fail")
 	}
 
-	// A second attempt has to try again rather than replay the failure from a
-	// cached entry.
 	_, err := kuma.Shared(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected the same failure")

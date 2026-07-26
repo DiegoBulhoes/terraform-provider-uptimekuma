@@ -11,14 +11,8 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-// Maintenance is the resource with the most branching, because Uptime Kuma
-// derives different columns depending on the strategy: a weekly window reads
-// weekdays and ignores days of month, a monthly one does the reverse, and a cron
-// window ignores both while the server computes the schedule itself.
-//
-// Each strategy therefore builds a different payload from the same schema, and a
-// field sent under the wrong strategy is either ignored — a permanent diff — or
-// rejected outright.
+// Each strategy builds a different payload from the same schema. A field sent
+// under the wrong strategy is either ignored — a permanent diff — or rejected.
 
 func intSet(values ...int64) tftypes.Value {
 	elements := make([]tftypes.Value, 0, len(values))
@@ -28,8 +22,7 @@ func intSet(values ...int64) tftypes.Value {
 	return tftypes.NewValue(tftypes.Set{ElementType: tftypes.Number}, elements)
 }
 
-// TestCreateSendsTheFieldsEachStrategyUses drives a create per strategy and
-// checks the payload the client receives.
+// One create per strategy, checking the payload the client receives.
 func TestCreateSendsTheFieldsEachStrategyUses(t *testing.T) {
 	t.Parallel()
 
@@ -91,8 +84,6 @@ func TestCreateSendsTheFieldsEachStrategyUses(t *testing.T) {
 				"timezone":   str("UTC"),
 			},
 			want: func(t *testing.T, sent kuma.Maintenance) {
-				// The server indexes dateRange whatever the strategy, and the column is
-				// NOT NULL with no default.
 				if len(sent.DateRange) == 0 {
 					t.Error("dateRange must always be sent: the column is NOT NULL with no default")
 				}
@@ -105,8 +96,7 @@ func TestCreateSendsTheFieldsEachStrategyUses(t *testing.T) {
 				"strategy": str("manual"),
 			},
 			want: func(t *testing.T, sent kuma.Maintenance) {
-				// A manual window has no schedule at all; the client fills in the
-				// columns the server dereferences (see NormalizeMaintenance).
+				// No schedule at all; NormalizeMaintenance fills the rest.
 				if sent.Strategy != "manual" {
 					t.Errorf("strategy = %q, want manual", sent.Strategy)
 				}
@@ -146,7 +136,6 @@ func TestCreateSendsTheFieldsEachStrategyUses(t *testing.T) {
 				})
 			client.EXPECT().SetMaintenanceMonitors(gomock.Any(), 6, gomock.Any()).Return(nil).AnyTimes()
 			client.EXPECT().SetMaintenanceStatusPages(gomock.Any(), 6, gomock.Any()).Return(nil).AnyTimes()
-			// The read-back after create.
 			client.EXPECT().GetMaintenance(gomock.Any(), 6).
 				DoAndReturn(func(_ any, _ int) (*kuma.Maintenance, error) {
 					created := sent
@@ -165,9 +154,8 @@ func TestCreateSendsTheFieldsEachStrategyUses(t *testing.T) {
 	}
 }
 
-// TestInvalidClockTimesAreRejectedBeforeTheServer covers the time parsing. The
-// server stores these as strings and validates loosely, so a typo would be
-// accepted and silently produce a window at the wrong hour.
+// The server stores these as strings and validates loosely, so a typo would
+// silently produce a window at the wrong hour.
 func TestInvalidClockTimesAreRejectedBeforeTheServer(t *testing.T) {
 	t.Parallel()
 
@@ -184,7 +172,6 @@ func TestInvalidClockTimesAreRejectedBeforeTheServer(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			t.Parallel()
 
-			// No client call is expected: the guard has to reject this first.
 			client := mocks.NewMockKumaClient(gomock.NewController(t))
 			r := configure(t, maintenance.New, client)
 
@@ -205,9 +192,8 @@ func TestInvalidClockTimesAreRejectedBeforeTheServer(t *testing.T) {
 	}
 }
 
-// TestValidClockTimesRoundTrip is the other side: a time the user wrote without
-// zero padding has to survive, because the server returns the padded form and a
-// mismatch would be a permanent diff.
+// A time written without zero padding has to survive: the server returns the
+// padded form, and a mismatch is a permanent diff.
 func TestValidClockTimesRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -220,7 +206,6 @@ func TestValidClockTimesRoundTrip(t *testing.T) {
 				t.Fatalf("%q should be a valid time: %s", value, err)
 			}
 
-			// Re-parsing the canonical rendering has to give the same instant.
 			again, err := maintenance.ParseClockTime(maintenance.FormatClockTime(part))
 			if err != nil {
 				t.Fatalf("the canonical rendering of %q does not parse: %s", value, err)
@@ -232,8 +217,7 @@ func TestValidClockTimesRoundTrip(t *testing.T) {
 	}
 }
 
-// TestReadDropsAMaintenanceDeletedOutsideTerraform covers the read path's
-// not-found handling, including the two association reads that follow it.
+// Not-found handling, including the two association reads that follow.
 func TestReadDropsAMaintenanceDeletedOutsideTerraform(t *testing.T) {
 	t.Parallel()
 
@@ -285,9 +269,8 @@ func TestReadDropsAMaintenanceDeletedOutsideTerraform(t *testing.T) {
 	})
 }
 
-// TestUpdateReplacesAssociationsWholesale pins down that the association events
-// replace the entire list rather than adding to it. Modelling them as
-// add-one-at-a-time would leave removed monitors attached.
+// The association events replace the whole list; add-one-at-a-time would leave
+// removed monitors attached.
 func TestUpdateReplacesAssociationsWholesale(t *testing.T) {
 	t.Parallel()
 

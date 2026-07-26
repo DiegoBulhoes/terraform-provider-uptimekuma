@@ -25,12 +25,9 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-// Data source lookups, driven directly with a mocked client.
-//
-// The lookups that take either an id or a name have three outcomes an acceptance
-// test cannot easily produce: both arguments given, neither given, and a name
-// matching more than one object. Uptime Kuma allows duplicate tag names, so that
-// last one is a real situation, not a hypothetical.
+// The id-or-name lookups have three outcomes an acceptance test cannot easily
+// produce: both given, neither given, and a name matching more than one object.
+// Uptime Kuma allows duplicate tag names, so the last one is real.
 
 func ptr[T any](v T) *T { return &v }
 
@@ -64,7 +61,6 @@ func configure(t *testing.T, factory func() fwdatasource.DataSource, client comm
 	return dataSourceUnderTest{ds: ds, schema: schemaResp}
 }
 
-// read calls Read with the given configuration and returns any errors.
 func (d dataSourceUnderTest) read(t *testing.T, values map[string]tftypes.Value) string {
 	t.Helper()
 
@@ -190,9 +186,8 @@ func TestMonitorLookup(t *testing.T) {
 	t.Run("a name matching several is rejected", func(t *testing.T) {
 		t.Parallel()
 
+		// Monitor names are not unique, so picking one silently is a coin toss.
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
-		// Uptime Kuma does not enforce unique monitor names, so picking one
-		// silently would be a coin toss.
 		client.EXPECT().ListMonitors(gomock.Any()).Return(map[int]kuma.Monitor{
 			7: {ID: 7, Name: "API", Type: "http"},
 			8: {ID: 8, Name: "API", Type: "ping"},
@@ -339,8 +334,8 @@ func TestTagLookup(t *testing.T) {
 	t.Run("a duplicate name is rejected", func(t *testing.T) {
 		t.Parallel()
 
-		client := mocks.NewMockKumaClient(gomock.NewController(t))
 		// Uptime Kuma really does allow two tags with the same name.
+		client := mocks.NewMockKumaClient(gomock.NewController(t))
 		client.EXPECT().ListTags(gomock.Any()).Return([]kuma.Tag{
 			{ID: 1, Name: "env", Color: "#a"},
 			{ID: 2, Name: "env", Color: "#b"},
@@ -492,9 +487,9 @@ func TestStatusPageList(t *testing.T) {
 	t.Run("reconnects to get a current list", func(t *testing.T) {
 		t.Parallel()
 
+		// refresh=true: the list only arrives at login, so a page created earlier in
+		// the same run would be missing.
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
-		// refresh=true, because the server only pushes this list at login and a
-		// page created earlier in the same run would otherwise be missing.
 		client.EXPECT().ListStatusPages(gomock.Any(), true).Return(map[int]kuma.StatusPage{
 			2: {ID: 2, Slug: "b", Title: "B", Published: kuma.BoolPtr(false)},
 			1: {ID: 1, Slug: "a", Title: "A", Published: kuma.BoolPtr(true)},
@@ -533,7 +528,7 @@ func TestEveryListDataSourceHandlesFailure(t *testing.T) {
 		names[metadataResp.TypeName] = true
 	}
 
-	// A guard against a data source being added without a test here.
+	// Fails if a data source is added without a test here.
 	for _, expected := range []string{
 		"uptimekuma_monitor", "uptimekuma_monitors", "uptimekuma_tag", "uptimekuma_tags",
 		"uptimekuma_notifications", "uptimekuma_maintenances", "uptimekuma_status_page",
@@ -549,14 +544,8 @@ func TestEveryListDataSourceHandlesFailure(t *testing.T) {
 	}
 }
 
-// TestEveryDataSourceStopsOnAnUndecodableConfig is the data source counterpart of
-// the resource guard: read the config into the model, stop if it did not decode.
-//
-// The consequence differs from a resource's. A data source that continues with a
-// zero-value model looks up the empty string or id 0, and whatever it finds — or
-// the not-found error it reports — has nothing to do with what the user asked
-// for. The mock controller has no expectations, so any lookup that still reaches
-// the client fails the test.
+// A data source that continues with a zero-value model looks up the empty string
+// or id 0, and whatever it finds has nothing to do with the request.
 func TestEveryDataSourceStopsOnAnUndecodableConfig(t *testing.T) {
 	t.Parallel()
 
@@ -582,8 +571,7 @@ func TestEveryDataSourceStopsOnAnUndecodableConfig(t *testing.T) {
 				t.Fatal("a data source schema is always an object")
 			}
 
-			// Pick any string attribute and hand over a boolean instead. Data sources
-			// have no common attribute the way resources all have id, so the first
+			// No common attribute here the way resources all have id, so the first
 			// string in the schema stands in.
 			var target string
 			for name, attributeType := range objectType.AttributeTypes {
@@ -610,9 +598,7 @@ func TestEveryDataSourceStopsOnAnUndecodableConfig(t *testing.T) {
 			raw := tftypes.NewValue(mistyped, attributes)
 
 			client := mocks.NewMockKumaClient(gomock.NewController(t))
-			// The two singletons take no input at all, so they have nothing to decode
-			// before fetching: they read the server first and only then write state.
-			// For them the malformed value has to be caught on the way out instead.
+			// The two singletons take no input, so they fetch before writing state.
 			switch metadataResp.TypeName {
 			case "uptimekuma_info":
 				client.EXPECT().Info().Return(kuma.ServerInfo{Version: "2.4.0"}).AnyTimes()
@@ -640,10 +626,8 @@ func TestEveryDataSourceStopsOnAnUndecodableConfig(t *testing.T) {
 
 			switch metadataResp.TypeName {
 			case "uptimekuma_info", "uptimekuma_settings":
-				// These two take no arguments, so there is no config to decode and
-				// nothing for a malformed one to break. Asserting they still succeed
-				// pins that down: adding an input attribute to either would need the
-				// guard, and this test would then fail and say so.
+				// No config to decode. Adding an input attribute to either would need
+				// the guard, and this test would then fail and say so.
 				if resp.Diagnostics.HasError() {
 					t.Errorf("%s takes no input, so a malformed config should not affect "+
 						"it: %s", metadataResp.TypeName, resp.Diagnostics)
@@ -658,14 +642,8 @@ func TestEveryDataSourceStopsOnAnUndecodableConfig(t *testing.T) {
 	}
 }
 
-// TestEveryListDataSourceReportsAFailedFetch covers the error path of the
-// remaining list data sources, which all have the same shape: one client call,
-// sorted output.
-//
-// Reporting an empty list instead of the failure would be the damaging outcome. A
-// data source feeds other resources' configuration — a for_each over
-// uptimekuma_notifications, say — and an empty result reads as "these were all
-// deleted", which plans the destruction of everything downstream.
+// An empty list instead of the failure is the damaging outcome: a for_each over
+// uptimekuma_notifications would read it as "all deleted" and plan a destroy.
 func TestEveryListDataSourceReportsAFailedFetch(t *testing.T) {
 	t.Parallel()
 
@@ -727,9 +705,7 @@ func TestEveryListDataSourceReportsAFailedFetch(t *testing.T) {
 	}
 }
 
-// TestListDataSourcesSucceedOnAnEmptyServer is the counterpart. An instance with
-// nothing configured yet is not an error, and treating it as one would make the
-// data source unusable in a configuration that creates the objects it reads.
+// An instance with nothing configured yet is not an error.
 func TestListDataSourcesSucceedOnAnEmptyServer(t *testing.T) {
 	t.Parallel()
 

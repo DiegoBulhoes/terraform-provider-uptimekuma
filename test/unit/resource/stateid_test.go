@@ -18,23 +18,13 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-// An unparseable ID in state.
-//
-// Every Read, Update and Delete starts by turning the state's string ID back into
-// the number the API needs. That parse can fail — a hand-edited state file, a
-// botched import, a state restored from a different provider version — and the
-// guard exists in all three operations of every resource.
-//
-// It matters that the guard reports rather than continues: parsing "abc" yields
-// zero, and an operation against id 0 either fails confusingly or, worse, hits
-// whatever row the server has at that index. No mock call is expected in any of
-// these, which is the actual assertion — GoMock fails the test if the resource
-// reaches the client anyway.
+// Parsing "abc" yields zero, and an operation against id 0 either fails
+// confusingly or hits whatever row sits at that index. No mock call is expected,
+// which is the assertion.
 
 func TestEveryOperationRejectsAnUnparseableStateID(t *testing.T) {
 	t.Parallel()
 
-	// The resources whose ID is a plain number.
 	numeric := map[string]func() fwresource.Resource{
 		"monitor":        monitor.NewKeywordResource,
 		"tag":            tag.New,
@@ -54,7 +44,6 @@ func TestEveryOperationRejectsAnUnparseableStateID(t *testing.T) {
 				t.Run("id="+id, func(t *testing.T) {
 					t.Parallel()
 
-					// Read.
 					readClient := mocks.NewMockKumaClient(gomock.NewController(t))
 					readResource := configure(t, factory, readClient)
 					state := readResource.state(t, map[string]tftypes.Value{"id": str(id)})
@@ -62,7 +51,6 @@ func TestEveryOperationRejectsAnUnparseableStateID(t *testing.T) {
 						t.Errorf("Read accepted %q as an ID", id)
 					}
 
-					// Delete.
 					deleteClient := mocks.NewMockKumaClient(gomock.NewController(t))
 					deleteResource := configure(t, factory, deleteClient)
 					deleteState := deleteResource.state(t, map[string]tftypes.Value{"id": str(id)})
@@ -75,9 +63,7 @@ func TestEveryOperationRejectsAnUnparseableStateID(t *testing.T) {
 	}
 }
 
-// TestIncidentIDsNeedBothParts covers the one composite ID. An incident is
-// addressed by its page slug and its own number, so "<slug>/<id>" is the state ID
-// and both halves have to be there.
+// The one composite ID: "<slug>/<id>" needs both halves.
 func TestIncidentIDsNeedBothParts(t *testing.T) {
 	t.Parallel()
 

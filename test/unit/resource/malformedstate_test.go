@@ -12,26 +12,11 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-// State or plan that will not decode into the model.
-//
-// Every CRUD method starts the same way: read the plan or state into the model,
-// then stop if that produced errors. The guard looks like boilerplate, and it is
-// the kind of line that gets dropped when a resource is written by copying
-// another one.
-//
-// What it prevents is specific. Without it the method continues with a zero-value
-// model — empty ID, empty name — and goes on to call the server with it. Delete
-// would ask the server to remove id 0. Create would write a nameless object. The
-// operation reports success, and the state file records something that does not
-// match anything on the server.
-//
-// This walks every registered resource and every operation, so the guarantee
-// covers resources added later too. The malformed value stands in for anything
-// that makes the decode fail: a state file written by a different provider
-// version, a hand edit, a type changed in the schema without a state upgrader.
+// Every CRUD method reads the plan or state into the model, then stops on error.
+// Without that guard the method continues with a zero-value model and calls the
+// server with it: Delete removes id 0, Create writes a nameless object.
 
-// mistypedObject returns a value with the schema's attribute names but one
-// attribute's type swapped, which is what the framework cannot convert.
+// mistypedObject swaps one attribute's type, which the framework cannot convert.
 func mistypedObject(t *testing.T, schema fwresource.SchemaResponse) tftypes.Value {
 	t.Helper()
 
@@ -41,8 +26,7 @@ func mistypedObject(t *testing.T, schema fwresource.SchemaResponse) tftypes.Valu
 		t.Fatal("a resource schema is always an object")
 	}
 
-	// id is present on every resource in this provider and is always a string, so
-	// handing over a boolean is guaranteed to fail the conversion.
+	// id is always a string here, so a boolean is guaranteed to fail.
 	if _, hasID := objectType.AttributeTypes["id"]; !hasID {
 		t.Fatal("every resource is expected to have an id attribute")
 	}
@@ -83,9 +67,7 @@ func TestEveryOperationStopsOnAnUndecodableModel(t *testing.T) {
 
 			raw := mistypedObject(t, schemaResp)
 
-			// A controller with no expectations: if any operation reaches the client
-			// despite the failed decode, GoMock fails the test. That is the real
-			// assertion here.
+			// No expectations: GoMock fails if any operation reaches the client.
 			newResource := func(t *testing.T) fwresource.Resource {
 				t.Helper()
 
@@ -160,11 +142,8 @@ func TestEveryOperationStopsOnAnUndecodableModel(t *testing.T) {
 					State: tfsdk.State{Schema: schemaResp.Schema, Raw: raw},
 				}, resp)
 
-				// Settings is the one exception, and deliberately so: it is a singleton
-				// with nothing to delete — Uptime Kuma cannot remove a setting, and
-				// reverting to some notion of "default" would be a guess. Its Delete
-				// never reads the state, so an undecodable one changes nothing. It warns
-				// instead, and that warning is the contract.
+				// Settings is a singleton with nothing to delete, so its Delete never
+				// reads the state. It warns instead, and that warning is the contract.
 				if metadataResp.TypeName == "uptimekuma_settings" {
 					if !hasWarning(resp) {
 						t.Error("destroying the settings resource must warn that the values " +
@@ -182,7 +161,6 @@ func TestEveryOperationStopsOnAnUndecodableModel(t *testing.T) {
 	}
 }
 
-// hasWarning reports whether any diagnostic is a warning.
 func hasWarning(resp *fwresource.DeleteResponse) bool {
 	return len(resp.Diagnostics.Warnings()) > 0
 }

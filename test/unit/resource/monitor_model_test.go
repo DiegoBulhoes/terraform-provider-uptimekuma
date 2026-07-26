@@ -15,18 +15,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-// Every monitor type contributes an ApplyTo/ReadFrom pair: the two functions
-// that translate its own attributes to and from the wire payload. There are 33
-// of them and they are the easiest place in the provider to lose a field —
-// writing one in ApplyTo and forgetting it in ReadFrom produces a permanent
-// diff that no compiler catches.
-//
-// Rather than 33 acceptance tests, this drives the hooks directly and asserts
-// the round trip: attributes -> wire -> attributes has to come back unchanged.
-// Walking the registry means a type added later is covered for free.
+// A field written in ApplyTo and forgotten in ReadFrom is a permanent diff no
+// compiler catches. This drives every type's pair and asserts the round trip.
 
-// jsonAttributes hold serialized JSON, so a plain "x" would be rejected by the
-// hook that parses them.
+// jsonAttributes hold serialized JSON, so a plain "x" is rejected.
 var jsonAttributes = map[string]string{
 	"conditions":                  `[]`,
 	"kafka_producer_brokers":      `["localhost:9092"]`,
@@ -70,7 +62,7 @@ func schemaOf(t *testing.T, res *monitor.Resource) fwresource.SchemaResponse {
 	return resp
 }
 
-// plausible builds a value of the given type that a hook will accept.
+// plausible builds a value a hook will accept.
 func plausible(name string, t attr.Type) tftypes.Value {
 	tfType := t.TerraformType(context.Background())
 
@@ -104,8 +96,7 @@ func plausible(name string, t attr.Type) tftypes.Value {
 	return tftypes.NewValue(tfType, nil)
 }
 
-// plausibleRaw is plausible for a bare tftypes.Type, used inside objects where
-// the attr.Type is no longer at hand.
+// plausibleRaw is plausible for a bare tftypes.Type, used inside objects.
 func plausibleRaw(name string, t tftypes.Type) tftypes.Value {
 	switch {
 	case t.Is(tftypes.String):
@@ -128,9 +119,8 @@ func elementType(t attr.Type) attr.Type {
 	return t
 }
 
-// nullObject builds a fully-null value of the schema's object type. The
-// framework refuses to read into a model from an object whose attributes are
-// missing entirely, so every attribute has to be present even when null.
+// nullObject builds a fully-null value. The framework needs every attribute
+// present, even when null.
 func nullObject(t *testing.T, objectType tftypes.Object) tftypes.Value {
 	t.Helper()
 
@@ -156,8 +146,7 @@ func TestEveryMonitorTypeRoundTripsItsAttributes(t *testing.T) {
 				t.Fatal("a resource schema is always an object")
 			}
 
-			// Type-specific attributes only: the base ones are exercised by the
-			// shared CRUD tests.
+			// Type-specific only; the base ones are covered by the CRUD tests.
 			specific := res.DefForTest().Attributes
 
 			attributes := make(map[string]tftypes.Value, len(objectType.AttributeTypes))
@@ -184,10 +173,8 @@ func TestEveryMonitorTypeRoundTripsItsAttributes(t *testing.T) {
 				t.Fatalf("ApplyTo rejected plausible values: %s", applyDiags)
 			}
 
-			// Read the same payload back into a fresh model. ReadFrom only writes
-			// the type-specific attributes, so the base ones are copied over —
-			// otherwise they stay at their zero value, which the framework
-			// rejects as an untyped collection when serializing.
+			// ReadFrom only writes type-specific attributes, so the base ones are
+			// copied over; their zero value serializes as an untyped collection.
 			readBack := res.NewModelForTest()
 			*readBack.Base() = *model.Base()
 			readDiags := diagnostics()
@@ -196,15 +183,13 @@ func TestEveryMonitorTypeRoundTripsItsAttributes(t *testing.T) {
 				t.Fatalf("ReadFrom failed on a payload ApplyTo produced: %s", readDiags)
 			}
 
-			// Serialize both models and compare only the type-specific attributes.
 			before := serialize(t, schemaResp, model)
 			after := serialize(t, schemaResp, readBack)
 
 			for attributeName := range specific {
 				attribute := specific[attributeName]
+				// Computed-only attributes are server state; ReadFrom is the only writer.
 				if attribute.IsComputed() && !attribute.IsOptional() {
-					// Computed-only attributes are server state; the plan value is
-					// meaningless and ReadFrom is the only writer.
 					continue
 				}
 				if !before[attributeName].Equal(after[attributeName]) {
@@ -217,10 +202,7 @@ func TestEveryMonitorTypeRoundTripsItsAttributes(t *testing.T) {
 	}
 }
 
-// TestEveryMonitorTypeHandlesNullAttributes covers the other half of each hook:
-// what happens when the user set none of the optional attributes. Sending a
-// zero value where the server expects null is how NOT NULL constraint errors and
-// spurious diffs appear.
+// The other half: none of the optional attributes set.
 func TestEveryMonitorTypeHandlesNullAttributes(t *testing.T) {
 	t.Parallel()
 
@@ -259,9 +241,7 @@ func TestEveryMonitorTypeHandlesNullAttributes(t *testing.T) {
 	}
 }
 
-// TestEveryMonitorTypeDeclaresItsWireType guards the registry itself: two types
-// sharing a WireType, or an empty one, would silently make one of them
-// unusable.
+// Two types sharing a WireType would silently make one unusable.
 func TestEveryMonitorTypeDeclaresItsWireType(t *testing.T) {
 	t.Parallel()
 
@@ -292,7 +272,7 @@ func TestEveryMonitorTypeDeclaresItsWireType(t *testing.T) {
 func TestMonitorTypeCount(t *testing.T) {
 	t.Parallel()
 
-	// A reminder to update the docs and the demo when a type is added.
+	// Update the docs and the demo when this changes.
 	const implemented = 9
 	if got := len(monitorResources(t)); got != implemented {
 		t.Errorf("%d monitor types implemented, expected %d — update the guide in templates/ and examples/demo/", got, implemented)
@@ -322,8 +302,7 @@ func serialize(t *testing.T, schemaResp fwresource.SchemaResponse, model any) ma
 
 func diagnostics() *diag.Diagnostics { return &diag.Diagnostics{} }
 
-// newWireMonitor is the payload the base CRUD would hand to a hook: the type is
-// already set, everything else is up to the model.
+// newWireMonitor is what the base CRUD hands a hook: type set, nothing else.
 func newWireMonitor(wireType string) *kuma.Monitor {
 	return &kuma.Monitor{Type: wireType}
 }
