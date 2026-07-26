@@ -156,6 +156,12 @@ func parseID(id string) (string, int, error) {
 	if !found {
 		return "", 0, fmt.Errorf("expected `<slug>/<incident id>`, got %q", id)
 	}
+	// An empty slug would reach the server as a request for the incidents of no
+	// page at all, and the answer to that is an empty list — which Read would
+	// interpret as the incident being gone and quietly drop it from state.
+	if slug == "" {
+		return "", 0, fmt.Errorf("expected a status page slug before the `/` in %q", id)
+	}
 	incidentID, err := strconv.Atoi(rest)
 	if err != nil {
 		return "", 0, fmt.Errorf("expected a numeric incident ID in %q", id)

@@ -2,6 +2,9 @@ package kuma
 
 import (
 	"context"
+	"crypto/tls"
+	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -75,3 +78,124 @@ func (c *Client) TimeoutForTest() time.Duration { return c.cfg.Timeout }
 
 // MaxRetriesForTest exposes the clamped retry count.
 func (c *Client) MaxRetriesForTest() int { return c.cfg.MaxRetries }
+
+// SessionForTest mirrors the socketSession interface, so a test can supply its
+// own answers to emitted events.
+//
+// This is the hook that makes the wire protocol testable without a server. A
+// healthy Uptime Kuma cannot be asked to acknowledge with ok:true and no ID, to
+// return a null object, or to answer with a malformed payload — yet every one of
+// those has a branch in this package, because the alternative is writing a zero
+// ID into Terraform state.
+type SessionForTest interface {
+	Emit(event any, args ...any) error
+	Close() error
+}
+
+// InjectSessionForTest installs a session and marks the client authenticated, so
+// calls go straight to it instead of dialing.
+func (c *Client) InjectSessionForTest(session SessionForTest) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sio = session
+	c.healthy = true
+	c.jwt = "test-token"
+}
+
+// IsHealthyForTest reports whether the client still trusts its session. Several
+// failures are supposed to drop it so the next call reconnects, and that is
+// invisible from the outside otherwise.
+func (c *Client) IsHealthyForTest() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.healthy
+}
+
+// SeedCachesForTest marks the pushed lists loaded, so a read hits the cache
+// instead of waiting for a push that no fake session will send.
+func (c *Client) SeedCachesForTest() {
+	c.cache.notifications.replace(map[int]Notification{})
+	c.cache.proxies.replace(map[int]Proxy{})
+	c.cache.dockerHosts.replace(map[int]DockerHost{})
+	c.cache.remoteBrowsers.replace(map[int]RemoteBrowser{})
+}
+
+// SetTimeoutForTest shortens the RPC timeout. Tests that deliberately let a call
+// go unanswered would otherwise wait the full default.
+func (c *Client) SetTimeoutForTest(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cfg.Timeout = d
+}
+
+// TLSWebSocketForTest exposes the custom WebSocket so its undialed state can be
+// exercised. A live connection never goes through those branches, but a failed or
+// pending dial does, and the alternative to returning an error there is a nil
+// dereference that kills the plugin process.
+type TLSWebSocketForTest = tlsWebSocket
+
+// NewTLSWebSocketForTest builds one that has not dialed.
+func NewTLSWebSocketForTest(tlsConfig *tls.Config) *TLSWebSocketForTest {
+	return &tlsWebSocket{tlsConfig: tlsConfig}
+}
+
+// DialForTest drives Dial with raw strings, so a test does not have to build URLs.
+func DialForTest(w *TLSWebSocketForTest, rawURL, rawOrigin string) error {
+	target, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+	origin, err := url.Parse(rawOrigin)
+	if err != nil {
+		return err
+	}
+	return w.Dial(context.Background(), target, origin)
+}
+
+// HTTPClientForTest exposes the HTTP client used by the long-polling transport,
+// which carries the Engine.IO handshake before the upgrade to WebSocket.
+func HTTPClientForTest(tlsConfig *tls.Config) *http.Client {
+	return httpClient(tlsConfig)
+}
+
+// AuthenticateForTest drives the login sequence against a supplied session.
+//
+// Authentication is where the most consequential branches live — reusing a cached
+// token, falling back to a password when the server rejects it, refusing to
+// proceed when 2FA is required — and none of them are reachable through the
+// public API, which only exposes "it connected" or "it did not".
+func (c *Client) AuthenticateForTest(ctx context.Context, session SessionForTest) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.authenticateLocked(ctx, session)
+}
+
+// SetTokenForTest seeds the cached JWT, as a previous successful login would.
+func (c *Client) SetTokenForTest(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.jwt = token
+}
+
+// TokenForTest returns the cached JWT.
+func (c *Client) TokenForTest() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.jwt
+}
+
+// SetCredentialsForTest replaces the configured credentials.
+func (c *Client) SetCredentialsForTest(username, password, totp string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cfg.Username = username
+	c.cfg.Password = password
+	c.cfg.TOTPToken = totp
+}
+
+// SetSkipAuthForTest toggles the unauthenticated mode used by needSetup/setup.
+func (c *Client) SetSkipAuthForTest(skip bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.skipAuth = skip
+}
