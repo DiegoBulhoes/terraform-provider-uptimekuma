@@ -111,17 +111,19 @@ Every one of these was verified against the upstream source, and each shaped the
 
 8. **Several entities have no getter event.** Notifications, proxies, Docker hosts and remote browsers only ever arrive by push, so `internal/kuma/wire/cache.go` keeps the lists. `getMonitorList`, `getMaintenanceList` and `getAPIKeyList` acknowledge with a bare `{ok:true}` and deliver the payload on the push channel too.
 
-9. **Logins are limited to 20 per minute server-wide.** `internal/kuma/client/pool.go` shares one session per configuration inside a process, and rate-limit rejections get a slower backoff than other retries.
+9. **A pushed list carries no clue which write produced it.** The server re-sends the whole list after every mutation, on a channel of its own, so with concurrent writes the first push after one write is routinely another's — and its list predates the row just created. `MutateUntil` therefore waits on a post-condition the caller states (the created ID is present, the deleted one is gone) rather than on the next push. Terraform applies ten resources at once by default, so this is the normal case, not the edge one.
 
-10. **`maintenance.dateRange` is always indexed by the server**, whatever the strategy, and `active` is NOT NULL with no default. `NormalizeMaintenance` fills both in.
+10. **Logins are limited to 20 per minute server-wide.** `internal/kuma/client/pool.go` shares one session per configuration inside a process, and rate-limit rejections get a slower backoff than other retries.
 
-11. **Optional fields need `omitempty` for compatibility.** On create the server feeds the payload to `bean.import()`, which turns each key into a column in the INSERT. Sending `"bearer_token": null` to a version that predates that column fails the whole statement. Omitting absent fields keeps one payload working across 2.2 to 2.4. The exception is a field a user can clear — a proxy's credentials, an API key's expiry — where null is the only way to empty it, and the column has existed since 1.x anyway. `TestOptionalFieldsAreOmittedForTheOtherEntities` holds that list.
+11. **`maintenance.dateRange` is always indexed by the server**, whatever the strategy, and `active` is NOT NULL with no default. `NormalizeMaintenance` fills both in.
 
-12. **Updates are built from the plan, not merged onto the server's copy.** Merging looks safer but makes removing an attribute impossible: a deleted value arrives as null, leaves the wire struct untouched, and the old value gets written straight back.
+12. **Optional fields need `omitempty` for compatibility.** On create the server feeds the payload to `bean.import()`, which turns each key into a column in the INSERT. Sending `"bearer_token": null` to a version that predates that column fails the whole statement. Omitting absent fields keeps one payload working across 2.2 to 2.4. The exception is a field a user can clear — a proxy's credentials, an API key's expiry — where null is the only way to empty it, and the column has existed since 1.x anyway. `TestOptionalFieldsAreOmittedForTheOtherEntities` holds that list.
 
-13. **A fresh 2.x instance stops at a database-selection step**, with only a stub HTTP server. `UPTIME_KUMA_DB_TYPE=sqlite` skips it, and the acceptance containers set it.
+13. **Updates are built from the plan, not merged onto the server's copy.** Merging looks safer but makes removing an attribute impossible: a deleted value arrives as null, leaves the wire struct untouched, and the old value gets written straight back.
 
-14. **Not-found has no distinct response.** A missing row makes the server dereference null and report a JavaScript TypeError, so `APIError.Is` matches on the message text.
+14. **A fresh 2.x instance stops at a database-selection step**, with only a stub HTTP server. `UPTIME_KUMA_DB_TYPE=sqlite` skips it, and the acceptance containers set it.
+
+15. **Not-found has no distinct response.** A missing row makes the server dereference null and report a JavaScript TypeError, so `APIError.Is` matches on the message text.
 
 ## Adding a monitor type
 
@@ -166,6 +168,8 @@ Wire field names come from `server/model/monitor.js` (`toJSON`). **That format m
 - All server access goes through `common.KumaClient` so it can be mocked.
 
 - Transport is `github.com/maldikhan/go.socket.io`. **Its ack callbacks have to be `func([]any)`.** Any other signature takes the library's reflection path, which requires every argument to be a `json.RawMessage` and silently drops the callback when it is not. That is how the connect handler fails.
+
+- **Its emit timeout does not cover a cancelled client context.** The per-ack goroutine selects on the acknowledgement, its timer and its own context, and the context branch only logs — neither callback fires. Closing a session cancels that context, so any call in flight during a reconnect would wait forever. `callWith` bounds every wait itself for that reason.
 
 - Known issue: that library has reported deadlocks in channel sends and a race on its namespace map. If tests hang or flake in the transport, apply `replace github.com/maldikhan/go.socket.io => github.com/breml/go.socket.io v0.0.0-20260516193936-e70410c8cd31` before suspecting this codebase.
 

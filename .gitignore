@@ -85,3 +85,6 @@ examples/demo/terraformrc
 
 # Coverage data directories from `make coverage`.
 .coverage/
+
+# Scratch space for handoff notes and throwaway files. Not versioned.
+/temp/

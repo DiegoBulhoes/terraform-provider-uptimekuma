@@ -19,6 +19,9 @@ type Caller interface {
 	// Mutate emits a write and waits for the list push it triggers, for the
 	// entities the server has no getter for.
 	Mutate(ctx context.Context, list wire.PushedList, out any, event string, args ...any) error
+	// MutateUntil is Mutate with a post-condition, so a write can wait for the
+	// push that carries its own result rather than for whichever lands first.
+	MutateUntil(ctx context.Context, list wire.PushedList, out any, ready func() bool, event string, args ...any) error
 	// EnsureLoaded makes sure a pushed list has arrived, refreshing if it has not.
 	EnsureLoaded(ctx context.Context, list wire.PushedList, refresh func(context.Context) error) error
 	// RefreshList asks the server to resend a list.
@@ -29,4 +32,19 @@ type Caller interface {
 	HTTPClient() *http.Client
 	// Endpoint is the base URL, needed to build that HTTP request.
 	Endpoint() string
+}
+
+// rowAdded is the post-condition of a create: the pushed list holds the ID the
+// acknowledgement returned. The ID is read through a pointer because it is only
+// known once the acknowledgement has been decoded.
+//
+// An unloaded list confirms nothing — a reconnect empties it — so waiting on one
+// would only burn the timeout. The read that follows reloads it anyway.
+func rowAdded(list wire.PushedList, id *int) func() bool {
+	return func() bool { return *id != 0 && (!list.IsLoaded() || list.Has(*id)) }
+}
+
+// rowGone is the post-condition of a delete.
+func rowGone(list wire.PushedList, id int) func() bool {
+	return func() bool { return !list.Has(id) }
 }

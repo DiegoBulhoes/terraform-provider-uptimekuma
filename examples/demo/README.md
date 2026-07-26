@@ -27,7 +27,7 @@ The container stays up until you run `make down`.
 | `make init` | Register the local modules |
 | `make apply` | Build the provider and apply `main.tf` |
 | `make plan` | Show what would change |
-| `make verify` | Apply, prove the next plan is empty, then destroy. This is what CI runs. |
+| `make verify` | Apply, prove the next plan is empty, then destroy. Needs a running container, so CI runs `make up verify`. |
 | `make show` | Print the outputs again |
 | `make destroy` | Remove what Terraform created; the container stays up |
 | `make down` | Stop the container and delete its data |

@@ -18,7 +18,13 @@ func SaveProxy(ctx context.Context, c Caller, id *int, proxy wire.Proxy) (int, e
 	if id != nil {
 		idArg = *id
 	}
-	if err := c.Mutate(ctx, c.Cache().Proxies, &resp, "addProxy", proxy, idArg); err != nil {
+	list := c.Cache().Proxies
+	var ready func() bool
+	if id == nil {
+		ready = rowAdded(list, &resp.ID)
+	}
+
+	if err := c.MutateUntil(ctx, list, &resp, ready, "addProxy", proxy, idArg); err != nil {
 		return 0, err
 	}
 	if resp.ID == 0 {
@@ -29,7 +35,8 @@ func SaveProxy(ctx context.Context, c Caller, id *int, proxy wire.Proxy) (int, e
 
 // DeleteProxy removes a proxy and detaches it from the monitors using it.
 func DeleteProxy(ctx context.Context, c Caller, id int) error {
-	return c.Mutate(ctx, c.Cache().Proxies, nil, "deleteProxy", id)
+	list := c.Cache().Proxies
+	return c.MutateUntil(ctx, list, nil, rowGone(list, id), "deleteProxy", id)
 }
 
 // ListProxies returns every proxy. Push-only, like notifications.

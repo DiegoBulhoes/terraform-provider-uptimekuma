@@ -13,6 +13,7 @@ output "outbound_ids" {
   value = [
     uptimekuma_monitor_http.external_api.id,
     uptimekuma_monitor_keyword.keyword.id,
+    uptimekuma_monitor_json_query.json_query.id,
     uptimekuma_monitor_dns.dns.id,
   ]
 }

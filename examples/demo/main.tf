@@ -17,7 +17,6 @@ module "settings" {
 module "monitors" {
   source = "./modules/monitors"
 
-  endpoint       = var.endpoint
   docker_host_id = module.infrastructure.docker_host_id
 
   tag_ids = {

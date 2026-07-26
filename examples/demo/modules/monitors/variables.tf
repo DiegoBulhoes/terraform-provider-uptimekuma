@@ -1,8 +1,3 @@
-variable "endpoint" {
-  description = "Base URL of the instance, used by the monitors that watch it."
-  type        = string
-}
-
 variable "tag_ids" {
   description = "Tag IDs to attach, keyed by name."
   type        = map(string)

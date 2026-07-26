@@ -16,6 +16,8 @@ resource "uptimekuma_monitor_group" "external" {
 
 # ── Works offline ───────────────────────────────────────────────────
 
+# The port the container listens on, which is 3001 whatever KUMA_PORT maps it to
+# on the host. The check runs inside the container, so the host port is no use.
 resource "uptimekuma_monitor_http" "self" {
   name      = "Uptime Kuma itself"
   url       = "http://localhost:3001"
@@ -120,7 +122,7 @@ resource "uptimekuma_monitor_dns" "dns" {
 
 # ── Passive and paused ──────────────────────────────────────────────
 
-# Uptime Kuma waits to be called instead of probing anything.
+# A push monitor waits to be called instead of probing anything.
 resource "uptimekuma_monitor_push" "nightly_job" {
   name      = "Nightly job heartbeat"
   interval  = 3600

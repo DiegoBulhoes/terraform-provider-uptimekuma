@@ -18,7 +18,13 @@ func SaveDockerHost(ctx context.Context, c Caller, id *int, host wire.DockerHost
 	if id != nil {
 		idArg = *id
 	}
-	if err := c.Mutate(ctx, c.Cache().DockerHosts, &resp, "addDockerHost", host, idArg); err != nil {
+	list := c.Cache().DockerHosts
+	var ready func() bool
+	if id == nil {
+		ready = rowAdded(list, &resp.ID)
+	}
+
+	if err := c.MutateUntil(ctx, list, &resp, ready, "addDockerHost", host, idArg); err != nil {
 		return 0, err
 	}
 	if resp.ID == 0 {
@@ -29,7 +35,8 @@ func SaveDockerHost(ctx context.Context, c Caller, id *int, host wire.DockerHost
 
 // DeleteDockerHost removes a Docker host.
 func DeleteDockerHost(ctx context.Context, c Caller, id int) error {
-	return c.Mutate(ctx, c.Cache().DockerHosts, nil, "deleteDockerHost", id)
+	list := c.Cache().DockerHosts
+	return c.MutateUntil(ctx, list, nil, rowGone(list, id), "deleteDockerHost", id)
 }
 
 // TestDockerHost asks the server to probe the daemon and returns its message.

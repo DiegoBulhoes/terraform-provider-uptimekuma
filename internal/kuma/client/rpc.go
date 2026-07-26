@@ -74,6 +74,15 @@ func (c *Client) callWith(ctx context.Context, sio socketSession, out any, event
 		return fmt.Errorf("emitting %q: %w", event, err)
 	}
 
+	// The library's own timeout is not enough to bound this wait. Its per-ack
+	// goroutine selects on the acknowledgement, the timer and its client context,
+	// and the context branch only logs: neither callback fires. Closing the
+	// session cancels exactly that context, so a reconnect forced by another
+	// goroutine leaves this one waiting on a channel nothing will ever write to.
+	// Terraform's apply context carries no deadline, so that wait is forever.
+	waitCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
+	defer cancel()
+
 	select {
 	case res := <-done:
 		if res.err != nil {
@@ -85,8 +94,12 @@ func (c *Client) callWith(ctx context.Context, sio socketSession, out any, event
 			return fmt.Errorf("%q: %w", event, res.err)
 		}
 		return decodeAck(event, res.raw, out)
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-waitCtx.Done():
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		c.markUnhealthy()
+		return fmt.Errorf("%q: %w", event, wire.ErrTimeout)
 	}
 }
 

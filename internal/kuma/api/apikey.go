@@ -21,7 +21,10 @@ func CreateAPIKey(ctx context.Context, c Caller, key wire.APIKey) (int, string, 
 		Key   string `json:"key"`
 		KeyID int    `json:"keyID"`
 	}
-	if err := c.Mutate(ctx, c.Cache().APIKeys, &resp, "addAPIKey", key); err != nil {
+	list := c.Cache().APIKeys
+	ready := rowAdded(list, &resp.KeyID)
+
+	if err := c.MutateUntil(ctx, list, &resp, ready, "addAPIKey", key); err != nil {
 		return 0, "", err
 	}
 	if resp.KeyID == 0 {
@@ -32,7 +35,8 @@ func CreateAPIKey(ctx context.Context, c Caller, key wire.APIKey) (int, string, 
 
 // DeleteAPIKey removes an API key.
 func DeleteAPIKey(ctx context.Context, c Caller, id int) error {
-	return c.Mutate(ctx, c.Cache().APIKeys, nil, "deleteAPIKey", id)
+	list := c.Cache().APIKeys
+	return c.MutateUntil(ctx, list, nil, rowGone(list, id), "deleteAPIKey", id)
 }
 
 // SetAPIKeyActive enables or disables a key without deleting it. There is no

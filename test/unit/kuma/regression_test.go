@@ -3,6 +3,7 @@ package kuma_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -440,5 +441,97 @@ func TestAFailedConnectionIsNotPooled(t *testing.T) {
 		t.Errorf("the failure looks like it came from the pool: %s", err)
 	}
 }
+
+// A create must wait for the push that carries its own row.
+//
+// Terraform applies up to ten resources at once over the one shared session, so
+// the first push after a write is often another write's, and its list predates
+// this row. Returning on it makes the Read that follows report the resource as
+// missing — which is what `uptimekuma_notification` did in the demo.
+func TestACreateWaitsForThePushCarryingItsOwnRow(t *testing.T) {
+	t.Parallel()
+
+	client := kuma.NewForHTTPTestOnly("http://127.0.0.1:1")
+	client.SetTimeoutForTest(5 * time.Second)
+	session := &interleavedPushSession{client: client}
+	client.InjectSessionForTest(session)
+
+	id, err := client.SaveNotification(context.Background(), nil, map[string]any{"name": "mine"})
+	if err != nil {
+		t.Fatalf("SaveNotification: %v", err)
+	}
+
+	if !client.Cache().Notifications.Has(id) {
+		t.Fatalf("the create returned before the pushed list held id %d.\n"+
+			"It woke on another write's push, whose list predates this row, so the "+
+			"Read that follows finds nothing and Terraform reports the resource as "+
+			"missing right after creating it.", id)
+	}
+}
+
+// interleavedPushSession answers a create the way a busy server does: another
+// resource's list lands first, and the one holding this row only afterwards.
+type interleavedPushSession struct{ client *kuma.Client }
+
+func (s *interleavedPushSession) Emit(_ any, args ...any) error {
+	callback := findAckCallback(args)
+	if callback == nil {
+		return nil
+	}
+	notifications := s.client.Cache().Notifications
+	go func() {
+		notifications.Replace(map[int]kuma.Notification{1: {ID: 1}})
+		callback([]any{json.RawMessage(`{"ok":true,"id":2}`)})
+
+		time.Sleep(50 * time.Millisecond)
+		notifications.Replace(map[int]kuma.Notification{1: {ID: 1}, 2: {ID: 2}})
+	}()
+	return nil
+}
+
+func (s *interleavedPushSession) Close() error { return nil }
+
+// No call may outlive the configured timeout, whatever the library does with it.
+//
+// go.socket.io runs one goroutine per acknowledgement, selecting on the ack, its
+// timer and its own client context. The context branch only logs: neither the ack
+// callback nor the timeout callback fires. Closing a session cancels exactly that
+// context, so a reconnect forced by another goroutine — which the provider does
+// on purpose, to make the server resend the push-only lists — leaves this call
+// waiting on a channel nothing will ever write to. Terraform's apply context
+// carries no deadline, so that wait was forever.
+func TestACallCannotOutliveItsTimeout(t *testing.T) {
+	t.Parallel()
+
+	client := kuma.NewForHTTPTestOnly("http://127.0.0.1:1")
+	client.SetTimeoutForTest(150 * time.Millisecond)
+	// Answers with neither an acknowledgement nor a timeout, as a session whose
+	// context was cancelled underneath it does.
+	client.InjectSessionForTest(&silentSession{})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.GetMonitor(context.Background(), 1)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, kuma.ErrTimeout) {
+			t.Errorf("the call should end as a timeout, so RetryRPC reconnects: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call never ended.\n" +
+			"Nothing bounds it but the caller's context, and Terraform's apply " +
+			"context has no deadline — so the resource hangs until the operator " +
+			"kills terraform, with the plugin still alive.")
+	}
+}
+
+// silentSession registers the callbacks and never invokes either.
+type silentSession struct{}
+
+func (s *silentSession) Emit(_ any, _ ...any) error { return nil }
+func (s *silentSession) Close() error               { return nil }
 
 func strPtr(s string) *string { return &s }

@@ -15,7 +15,10 @@ func CreateMaintenance(ctx context.Context, c Caller, maintenance wire.Maintenan
 		wire.AckEnvelope
 		MaintenanceID int `json:"maintenanceID"`
 	}
-	if err := c.Mutate(ctx, c.Cache().Maintenances, &resp, "addMaintenance", maintenance); err != nil {
+	list := c.Cache().Maintenances
+	ready := rowAdded(list, &resp.MaintenanceID)
+
+	if err := c.MutateUntil(ctx, list, &resp, ready, "addMaintenance", maintenance); err != nil {
 		return 0, err
 	}
 	if resp.MaintenanceID == 0 {
@@ -63,7 +66,8 @@ func ListMaintenances(ctx context.Context, c Caller) (map[int]wire.Maintenance, 
 
 // DeleteMaintenance removes a maintenance window.
 func DeleteMaintenance(ctx context.Context, c Caller, id int) error {
-	return c.Mutate(ctx, c.Cache().Maintenances, nil, "deleteMaintenance", id)
+	list := c.Cache().Maintenances
+	return c.MutateUntil(ctx, list, nil, rowGone(list, id), "deleteMaintenance", id)
 }
 
 // PauseMaintenance suspends a maintenance window.

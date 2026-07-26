@@ -18,7 +18,13 @@ func SaveRemoteBrowser(ctx context.Context, c Caller, id *int, browser wire.Remo
 	if id != nil {
 		idArg = *id
 	}
-	if err := c.Mutate(ctx, c.Cache().RemoteBrowsers, &resp, "addRemoteBrowser", browser, idArg); err != nil {
+	list := c.Cache().RemoteBrowsers
+	var ready func() bool
+	if id == nil {
+		ready = rowAdded(list, &resp.ID)
+	}
+
+	if err := c.MutateUntil(ctx, list, &resp, ready, "addRemoteBrowser", browser, idArg); err != nil {
 		return 0, err
 	}
 	if resp.ID == 0 {
@@ -29,7 +35,8 @@ func SaveRemoteBrowser(ctx context.Context, c Caller, id *int, browser wire.Remo
 
 // DeleteRemoteBrowser removes a remote browser.
 func DeleteRemoteBrowser(ctx context.Context, c Caller, id int) error {
-	return c.Mutate(ctx, c.Cache().RemoteBrowsers, nil, "deleteRemoteBrowser", id)
+	list := c.Cache().RemoteBrowsers
+	return c.MutateUntil(ctx, list, nil, rowGone(list, id), "deleteRemoteBrowser", id)
 }
 
 // ListRemoteBrowsers returns every remote browser. Push-only.

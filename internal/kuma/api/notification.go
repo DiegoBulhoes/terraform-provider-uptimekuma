@@ -27,7 +27,15 @@ func SaveNotification(ctx context.Context, c Caller, id *int, payload map[string
 		idArg = *id
 	}
 
-	if err := c.Mutate(ctx, c.Cache().Notifications, &resp, "addNotification", payload, idArg); err != nil {
+	// A create can wait for its own row to appear; an update cannot, since the
+	// row is already in the list whatever the server does with the payload.
+	list := c.Cache().Notifications
+	var ready func() bool
+	if id == nil {
+		ready = rowAdded(list, &resp.ID)
+	}
+
+	if err := c.MutateUntil(ctx, list, &resp, ready, "addNotification", payload, idArg); err != nil {
 		return 0, err
 	}
 	if resp.ID == 0 {
@@ -38,7 +46,8 @@ func SaveNotification(ctx context.Context, c Caller, id *int, payload map[string
 
 // DeleteNotification removes a notification channel.
 func DeleteNotification(ctx context.Context, c Caller, id int) error {
-	return c.Mutate(ctx, c.Cache().Notifications, nil, "deleteNotification", id)
+	list := c.Cache().Notifications
+	return c.MutateUntil(ctx, list, nil, rowGone(list, id), "deleteNotification", id)
 }
 
 // TestNotification asks the server to deliver a test message.

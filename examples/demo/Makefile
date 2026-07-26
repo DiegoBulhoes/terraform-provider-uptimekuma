@@ -29,7 +29,7 @@ help:
 	@echo "Uptime Kuma provider demo"
 	@echo
 	@echo "  make demo       start the container and apply everything (start here)"
-	@echo "  make verify     apply, prove the plan is then empty, and destroy (what CI runs)"
+	@echo "  make verify     apply, prove the plan is then empty, and destroy (needs 'make up')"
 	@echo "  make up         start Uptime Kuma and create the admin user"
 	@echo "  make apply      build the provider and apply main.tf"
 	@echo "  make plan       show what would change (empty plan means no drift)"
@@ -137,6 +137,12 @@ verify: apply
 		echo "✗ plan failed"; \
 		exit $$code; \
 	fi
+	@echo
+	@echo "tearing down..."
+	@# Not the destroy target: it depends on init, and a second `terraform init`
+	@# goes back to the registry for a provider that only exists through
+	@# dev_overrides. The directory is already initialized by now.
+	$(TF) destroy -auto-approve $(TF_VARS)
 
 .PHONY: fmt
 fmt:

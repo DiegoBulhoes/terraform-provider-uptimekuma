@@ -82,6 +82,13 @@ func (s *ListState[T]) Subscribe() <-chan struct{} {
 	return s.updated
 }
 
+func (s *ListState[T]) Has(id int) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.items[id]
+	return ok
+}
+
 func (s *ListState[T]) Get(id int) (T, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -121,6 +128,7 @@ func WaitUpdate(ctx context.Context, ch <-chan struct{}) {
 type PushedList interface {
 	IsLoaded() bool
 	Subscribe() <-chan struct{}
+	Has(id int) bool
 }
 
 type Cache struct {
