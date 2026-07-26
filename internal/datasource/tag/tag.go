@@ -7,8 +7,10 @@ import (
 	"strconv"
 
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/common"
+	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -77,14 +79,7 @@ func (d *DataSource) Read(ctx context.Context, req datasource.ReadRequest, resp 
 		return
 	}
 
-	hasID := common.IsSet(model.ID)
-	hasName := common.IsSet(model.Name)
-	switch {
-	case hasID && hasName:
-		resp.Diagnostics.AddError("Ambiguous tag lookup", "Set either `id` or `name`, not both.")
-		return
-	case !hasID && !hasName:
-		resp.Diagnostics.AddError("Missing tag lookup", "Set either `id` or `name`.")
+	if !validLookup(model, &resp.Diagnostics) {
 		return
 	}
 
@@ -94,43 +89,74 @@ func (d *DataSource) Read(ctx context.Context, req datasource.ReadRequest, resp 
 		return
 	}
 
-	if hasID {
-		id, ok := common.ParseID(model.ID, &resp.Diagnostics)
-		if !ok {
-			return
-		}
-		for _, tag := range tags {
-			if tag.ID == id {
-				model.Name = types.StringValue(tag.Name)
-				model.Color = types.StringValue(tag.Color)
-				resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
-				return
-			}
-		}
-		resp.Diagnostics.AddError("Tag not found", fmt.Sprintf("No tag with ID %d.", id))
+	var found *kuma.Tag
+	if common.IsSet(model.ID) {
+		found = d.findByID(model, tags, &resp.Diagnostics)
+	} else {
+		found = d.findByName(model, tags, &resp.Diagnostics)
+	}
+	if found == nil {
 		return
 	}
 
-	name := model.Name.ValueString()
-	matches := 0
-	for _, tag := range tags {
-		if tag.Name != name {
-			continue
-		}
-		matches++
-		model.ID = types.StringValue(strconv.Itoa(tag.ID))
-		model.Color = types.StringValue(tag.Color)
+	model.ID = types.StringValue(strconv.Itoa(found.ID))
+	model.Name = types.StringValue(found.Name)
+	model.Color = types.StringValue(found.Color)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+// validLookup checks exactly one of id and name was given.
+func validLookup(model Model, diags *diag.Diagnostics) bool {
+	hasID := common.IsSet(model.ID)
+	hasName := common.IsSet(model.Name)
+	switch {
+	case hasID && hasName:
+		diags.AddError("Ambiguous tag lookup", "Set either `id` or `name`, not both.")
+		return false
+	case !hasID && !hasName:
+		diags.AddError("Missing tag lookup", "Set either `id` or `name`.")
+		return false
 	}
-	switch matches {
+	return true
+}
+
+func (d *DataSource) findByID(model Model, tags []kuma.Tag, diags *diag.Diagnostics) *kuma.Tag {
+	id, ok := common.ParseID(model.ID, diags)
+	if !ok {
+		return nil
+	}
+	for _, tag := range tags {
+		if tag.ID == id {
+			return &tag
+		}
+	}
+	diags.AddError("Tag not found", fmt.Sprintf("No tag with ID %d.", id))
+	return nil
+}
+
+// findByName requires exactly one match. Uptime Kuma allows duplicate tag names,
+// so picking one silently would be a coin toss.
+func (d *DataSource) findByName(model Model, tags []kuma.Tag, diags *diag.Diagnostics) *kuma.Tag {
+	name := model.Name.ValueString()
+
+	var matches []kuma.Tag
+	for _, tag := range tags {
+		if tag.Name == name {
+			matches = append(matches, tag)
+		}
+	}
+
+	switch len(matches) {
 	case 0:
-		resp.Diagnostics.AddError("Tag not found", fmt.Sprintf("No tag named %q.", name))
+		diags.AddError("Tag not found", fmt.Sprintf("No tag named %q.", name))
+		return nil
 	case 1:
-		resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+		return &matches[0]
 	default:
-		// Uptime Kuma allows duplicate tag names, so this is reachable.
-		resp.Diagnostics.AddError(
+		diags.AddError(
 			"Ambiguous tag name",
-			fmt.Sprintf("%d tags are named %q; look the tag up by id instead.", matches, name),
+			fmt.Sprintf("%d tags are named %q; look the tag up by id instead.", len(matches), name),
 		)
+		return nil
 	}
 }

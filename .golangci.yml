@@ -15,7 +15,15 @@ linters:
     - gosec
     - gocritic
     - unparam
+    - funlen
+    - gocognit
   settings:
+    funlen:
+      lines: 80
+      statements: 50
+      ignore-comments: true
+    gocognit:
+      min-complexity: 25
     gosec:
       excludes:
         # G115 flags integer conversions; our Int64→int conversions read
@@ -23,6 +31,18 @@ linters:
         - G115
   exclusions:
     rules:
+      # Table-driven tests are long by construction: the length is the table, not
+      # the logic. Same for the assertion-heavy round-trip tests.
+      - path: _test\.go
+        linters:
+          - funlen
+          - gocognit
+      # A schema is one declaration with one responsibility. Splitting it means
+      # jumping between functions to read a single resource's attributes.
+      - source: '^func .*(Schema|[aA]ttributes)\('
+        linters:
+          - funlen
+          - gocognit
       # Test fixtures legitimately exercise error paths and hard-code
       # values; keep the main lint signal on production code.
       - path: _test\.go

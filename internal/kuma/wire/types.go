@@ -1,4 +1,9 @@
-package kuma
+// Package wire holds the payloads Uptime Kuma sends and expects, and the pieces
+// needed to decode them.
+//
+// The format mixes snake_case and camelCase in the same object, so the JSON tags
+// are mapped field by field from server/model/*.js rather than normalized.
+package wire
 
 import "encoding/json"
 

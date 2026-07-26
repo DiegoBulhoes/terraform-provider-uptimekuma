@@ -11,6 +11,7 @@ import (
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/common"
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -262,45 +263,77 @@ func (r *Resource) Update(ctx context.Context, req resource.UpdateRequest, resp 
 	// Captured before readInto overwrites it with the server's value.
 	wantPinned := plan.Pinned
 
+	if !r.editContent(ctx, slug, incidentID, &plan, state.ID, &resp.Diagnostics) {
+		return
+	}
+	if !r.reconcilePinned(ctx, slug, incidentID, wantPinned, state.Pinned, &plan, &resp.Diagnostics) {
+		return
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// editContent writes the title, body and style, and reads the result back.
+func (r *Resource) editContent(
+	ctx context.Context,
+	slug string,
+	incidentID int,
+	plan *Model,
+	stateID types.String,
+	diags *diag.Diagnostics,
+) bool {
 	var incident *kuma.StatusPageIncident
-	err = common.RetryRPC(ctx, 3, func() error {
+	err := common.RetryRPC(ctx, 3, func() error {
 		var editErr error
 		incident, editErr = r.client.EditIncident(ctx, slug, incidentID, plan.wire())
 		return editErr
 	})
 	if err != nil {
-		resp.Diagnostics.AddError("Unable to update incident", err.Error())
-		return
+		diags.AddError("Unable to update incident", err.Error())
+		return false
 	}
 
-	if incident != nil {
-		plan.readInto(slug, incident)
-	} else {
-		plan.ID = state.ID
+	if incident == nil {
+		plan.ID = stateID
+		return true
+	}
+	plan.readInto(slug, incident)
+	return true
+}
+
+// reconcilePinned applies a change to `pinned`, which editIncident leaves alone.
+//
+// Unpinning is a resolve. Pinning again is a fresh post, because nothing
+// unresolves an incident.
+func (r *Resource) reconcilePinned(
+	ctx context.Context,
+	slug string,
+	incidentID int,
+	wantPinned, wasPinned types.Bool,
+	plan *Model,
+	diags *diag.Diagnostics,
+) bool {
+	if !common.IsSet(wantPinned) || wantPinned.ValueBool() == wasPinned.ValueBool() {
+		return true
 	}
 
-	// Reconcile the pinned state, which editIncident leaves alone.
-	if common.IsSet(wantPinned) {
-		switch {
-		case !wantPinned.ValueBool() && state.Pinned.ValueBool():
-			if err := r.client.ResolveIncident(ctx, slug, incidentID); err != nil {
-				resp.Diagnostics.AddError("Unable to resolve incident", err.Error())
-				return
-			}
-			plan.Pinned = types.BoolValue(false)
-			plan.Active = types.BoolValue(false)
-		case wantPinned.ValueBool() && !state.Pinned.ValueBool():
-			// Re-pinning means posting again: nothing unresolves an incident.
-			reposted, err := r.client.PostIncident(ctx, slug, plan.wire())
-			if err != nil {
-				resp.Diagnostics.AddError("Unable to pin the incident again", err.Error())
-				return
-			}
-			plan.readInto(slug, reposted)
+	if !wantPinned.ValueBool() {
+		if err := r.client.ResolveIncident(ctx, slug, incidentID); err != nil {
+			diags.AddError("Unable to resolve incident", err.Error())
+			return false
 		}
+		plan.Pinned = types.BoolValue(false)
+		plan.Active = types.BoolValue(false)
+		return true
 	}
 
-	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	reposted, err := r.client.PostIncident(ctx, slug, plan.wire())
+	if err != nil {
+		diags.AddError("Unable to pin the incident again", err.Error())
+		return false
+	}
+	plan.readInto(slug, reposted)
+	return true
 }
 
 func (r *Resource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

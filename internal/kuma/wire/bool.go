@@ -1,4 +1,4 @@
-package kuma
+package wire
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 // dumping database rows straight to JSON (redbean's `bean.export()`, used for
 // proxies, and `APIKey.toPublicJSON`), and SQLite stores booleans as 0/1. A
 // plain bool field fails to unmarshal those, and because the pushed lists are
-// decoded in an event handler the failure is silent: the cache simply stays
+// decoded in an event handler the failure is silent: the Cache simply stays
 // empty and every read reports the entity as missing.
 //
 // Marshalling always produces a real boolean, which is what the server expects

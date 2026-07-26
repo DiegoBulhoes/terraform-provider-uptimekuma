@@ -1,4 +1,4 @@
-package kuma
+package api
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma/wire"
 )
 
 // Status pages are the one entity where Socket.IO is not enough.
@@ -22,12 +24,12 @@ import (
 // addStatusPage takes only a title and a slug; everything else is applied by a
 // follow-up SaveStatusPage. The server lowercases the slug, so the value it
 // returns is the one to keep.
-func (c *Client) CreateStatusPage(ctx context.Context, title, slug string) (string, error) {
+func CreateStatusPage(ctx context.Context, c Caller, title, slug string) (string, error) {
 	var resp struct {
-		ackEnvelope
+		wire.AckEnvelope
 		Slug string `json:"slug"`
 	}
-	if err := c.call(ctx, &resp, "addStatusPage", title, slug); err != nil {
+	if err := c.Call(ctx, &resp, "addStatusPage", title, slug); err != nil {
 		return "", err
 	}
 	if resp.Slug == "" {
@@ -47,26 +49,27 @@ func (c *Client) CreateStatusPage(ctx context.Context, title, slug string) (stri
 //
 // Renaming is possible: config.Slug may differ from the slug argument, which is
 // the current one.
-func (c *Client) SaveStatusPage(
+func SaveStatusPage(
 	ctx context.Context,
+	c Caller,
 	slug string,
-	config StatusPage,
+	config wire.StatusPage,
 	icon string,
-	groups []StatusPageGroup,
-) ([]StatusPageGroup, error) {
+	groups []wire.StatusPageGroup,
+) ([]wire.StatusPageGroup, error) {
 	normalizeStatusPage(&config)
 
 	// Never nil: the handler iterates the list, and deleting every group is how
 	// a page is emptied.
 	if groups == nil {
-		groups = []StatusPageGroup{}
+		groups = []wire.StatusPageGroup{}
 	}
 
 	var resp struct {
-		ackEnvelope
-		PublicGroupList []StatusPageGroup `json:"publicGroupList"`
+		wire.AckEnvelope
+		PublicGroupList []wire.StatusPageGroup `json:"publicGroupList"`
 	}
-	if err := c.call(ctx, &resp, "saveStatusPage", slug, config, icon, groups); err != nil {
+	if err := c.Call(ctx, &resp, "saveStatusPage", slug, config, icon, groups); err != nil {
 		return nil, err
 	}
 	return resp.PublicGroupList, nil
@@ -74,16 +77,16 @@ func (c *Client) SaveStatusPage(
 
 // GetStatusPage reads a page's configuration. The group tree is not included;
 // use GetStatusPageGroups for that.
-func (c *Client) GetStatusPage(ctx context.Context, slug string) (*StatusPage, error) {
+func GetStatusPage(ctx context.Context, c Caller, slug string) (*wire.StatusPage, error) {
 	var resp struct {
-		ackEnvelope
-		Config *StatusPage `json:"config"`
+		wire.AckEnvelope
+		Config *wire.StatusPage `json:"config"`
 	}
-	if err := c.call(ctx, &resp, "getStatusPage", slug); err != nil {
+	if err := c.Call(ctx, &resp, "getStatusPage", slug); err != nil {
 		return nil, err
 	}
 	if resp.Config == nil {
-		return nil, ErrNotFound
+		return nil, wire.ErrNotFound
 	}
 	return resp.Config, nil
 }
@@ -92,12 +95,12 @@ func (c *Client) GetStatusPage(ctx context.Context, slug string) (*StatusPage, e
 // exposed.
 //
 // The route is cached for five minutes server-side. That is harmless right after
-// a write, because saveStatusPage clears the cache, but a plain refresh can see
+// a write, because saveStatusPage clears the wire.Cache, but a plain refresh can see
 // values up to five minutes old.
-func (c *Client) GetStatusPageGroups(ctx context.Context, slug string) ([]StatusPageGroup, error) {
-	endpoint, err := url.Parse(c.cfg.Endpoint)
+func GetStatusPageGroups(ctx context.Context, c Caller, slug string) ([]wire.StatusPageGroup, error) {
+	endpoint, err := url.Parse(c.Endpoint())
 	if err != nil {
-		return nil, fmt.Errorf("invalid endpoint %q: %w", c.cfg.Endpoint, err)
+		return nil, fmt.Errorf("invalid endpoint %q: %w", c.Endpoint(), err)
 	}
 	endpoint.Path = "/api/status-page/" + url.PathEscape(strings.ToLower(slug))
 
@@ -106,7 +109,7 @@ func (c *Client) GetStatusPageGroups(ctx context.Context, slug string) ([]Status
 		return nil, fmt.Errorf("building request: %w", err)
 	}
 
-	resp, err := c.http().Do(req)
+	resp, err := c.HTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("reading status page groups: %w", err)
 	}
@@ -120,13 +123,13 @@ func (c *Client) GetStatusPageGroups(ctx context.Context, slug string) ([]Status
 	if resp.StatusCode != http.StatusOK {
 		// The route answers 404 with a JSON body for an unknown slug.
 		if resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("status page %q: %w", slug, ErrNotFound)
+			return nil, fmt.Errorf("status page %q: %w", slug, wire.ErrNotFound)
 		}
 		return nil, fmt.Errorf("reading status page groups: unexpected status %s", resp.Status)
 	}
 
 	var payload struct {
-		PublicGroupList []StatusPageGroup `json:"publicGroupList"`
+		PublicGroupList []wire.StatusPageGroup `json:"publicGroupList"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("decoding status page groups: %w", err)
@@ -144,26 +147,26 @@ func (c *Client) GetStatusPageGroups(ctx context.Context, slug string) ([]Status
 // refresh forces a reconnect so the server runs afterLogin again, which is the
 // only way to get a current list. It costs one login, and the server allows 20
 // per minute, so callers should not do it in a loop.
-func (c *Client) ListStatusPages(ctx context.Context, refresh bool) (map[int]StatusPage, error) {
+func ListStatusPages(ctx context.Context, c Caller, refresh bool) (map[int]wire.StatusPage, error) {
 	if refresh {
-		// Dropping the cache is enough: ensureLoaded reconnects when a
+		// Dropping the wire.Cache is enough: ensureLoaded reconnects when a
 		// push-only list is missing, and afterLogin then resends it.
-		c.cache.statusPages.invalidate()
+		c.Cache().StatusPages.Invalidate()
 	}
-	if err := c.ensureLoaded(ctx, c.cache.statusPages, nil); err != nil {
+	if err := c.EnsureLoaded(ctx, c.Cache().StatusPages, nil); err != nil {
 		return nil, err
 	}
-	return c.cache.statusPages.all(), nil
+	return c.Cache().StatusPages.All(), nil
 }
 
 // DeleteStatusPage removes a page along with its groups and incidents.
-func (c *Client) DeleteStatusPage(ctx context.Context, slug string) error {
+func DeleteStatusPage(ctx context.Context, c Caller, slug string) error {
 	// Not routed through mutate: no push follows this, so there is nothing to
 	// wait for. The cached list is dropped instead, so a later read reconnects.
-	if err := c.call(ctx, nil, "deleteStatusPage", slug); err != nil {
+	if err := c.Call(ctx, nil, "deleteStatusPage", slug); err != nil {
 		return err
 	}
-	c.cache.statusPages.invalidate()
+	c.Cache().StatusPages.Invalidate()
 	return nil
 }
 
@@ -171,12 +174,12 @@ func (c *Client) DeleteStatusPage(ctx context.Context, slug string) error {
 //
 // A page holds at most one pinned incident: posting always pins the result, so
 // this doubles as "replace the current banner".
-func (c *Client) PostIncident(ctx context.Context, slug string, incident StatusPageIncident) (*StatusPageIncident, error) {
+func PostIncident(ctx context.Context, c Caller, slug string, incident wire.StatusPageIncident) (*wire.StatusPageIncident, error) {
 	var resp struct {
-		ackEnvelope
-		Incident *StatusPageIncident `json:"incident"`
+		wire.AckEnvelope
+		Incident *wire.StatusPageIncident `json:"incident"`
 	}
-	if err := c.call(ctx, &resp, "postIncident", slug, incident); err != nil {
+	if err := c.Call(ctx, &resp, "postIncident", slug, incident); err != nil {
 		return nil, err
 	}
 	if resp.Incident == nil {
@@ -186,40 +189,40 @@ func (c *Client) PostIncident(ctx context.Context, slug string, incident StatusP
 }
 
 // EditIncident updates an incident without changing its pinned state.
-func (c *Client) EditIncident(ctx context.Context, slug string, id int, incident StatusPageIncident) (*StatusPageIncident, error) {
+func EditIncident(ctx context.Context, c Caller, slug string, id int, incident wire.StatusPageIncident) (*wire.StatusPageIncident, error) {
 	var resp struct {
-		ackEnvelope
-		Incident *StatusPageIncident `json:"incident"`
+		wire.AckEnvelope
+		Incident *wire.StatusPageIncident `json:"incident"`
 	}
-	if err := c.call(ctx, &resp, "editIncident", slug, id, incident); err != nil {
+	if err := c.Call(ctx, &resp, "editIncident", slug, id, incident); err != nil {
 		return nil, err
 	}
 	return resp.Incident, nil
 }
 
 // ResolveIncident marks an incident resolved, which also unpins it.
-func (c *Client) ResolveIncident(ctx context.Context, slug string, id int) error {
-	return c.call(ctx, nil, "resolveIncident", slug, id)
+func ResolveIncident(ctx context.Context, c Caller, slug string, id int) error {
+	return c.Call(ctx, nil, "resolveIncident", slug, id)
 }
 
 // DeleteIncident removes an incident outright.
-func (c *Client) DeleteIncident(ctx context.Context, slug string, id int) error {
-	return c.call(ctx, nil, "deleteIncident", slug, id)
+func DeleteIncident(ctx context.Context, c Caller, slug string, id int) error {
+	return c.Call(ctx, nil, "deleteIncident", slug, id)
 }
 
 // UnpinIncident hides the banner without deleting the incident.
-func (c *Client) UnpinIncident(ctx context.Context, slug string) error {
-	return c.call(ctx, nil, "unpinIncident", slug)
+func UnpinIncident(ctx context.Context, c Caller, slug string) error {
+	return c.Call(ctx, nil, "unpinIncident", slug)
 }
 
 // GetIncidentHistory returns the incidents of a page, newest first.
-func (c *Client) GetIncidentHistory(ctx context.Context, slug string) ([]StatusPageIncident, error) {
+func GetIncidentHistory(ctx context.Context, c Caller, slug string) ([]wire.StatusPageIncident, error) {
 	var resp struct {
-		ackEnvelope
-		Incidents []StatusPageIncident `json:"incidents"`
+		wire.AckEnvelope
+		Incidents []wire.StatusPageIncident `json:"incidents"`
 	}
 	// The cursor argument pages through the history; nil asks for the first page.
-	if err := c.call(ctx, &resp, "getIncidentHistory", slug, nil); err != nil {
+	if err := c.Call(ctx, &resp, "getIncidentHistory", slug, nil); err != nil {
 		return nil, err
 	}
 	return resp.Incidents, nil
@@ -227,23 +230,23 @@ func (c *Client) GetIncidentHistory(ctx context.Context, slug string) ([]StatusP
 
 // SetMaintenanceStatusPages sets which status pages a maintenance window shows
 // on. Like the monitor association, this replaces the whole set.
-func (c *Client) SetMaintenanceStatusPages(ctx context.Context, maintenanceID int, statusPageIDs []int) error {
+func SetMaintenanceStatusPages(ctx context.Context, c Caller, maintenanceID int, statusPageIDs []int) error {
 	pages := make([]map[string]any, 0, len(statusPageIDs))
 	for _, id := range statusPageIDs {
 		pages = append(pages, map[string]any{"id": id})
 	}
-	return c.call(ctx, nil, "addMaintenanceStatusPage", maintenanceID, pages)
+	return c.Call(ctx, nil, "addMaintenanceStatusPage", maintenanceID, pages)
 }
 
 // GetMaintenanceStatusPages returns the status page IDs attached to a window.
-func (c *Client) GetMaintenanceStatusPages(ctx context.Context, maintenanceID int) ([]int, error) {
+func GetMaintenanceStatusPages(ctx context.Context, c Caller, maintenanceID int) ([]int, error) {
 	var resp struct {
-		ackEnvelope
+		wire.AckEnvelope
 		StatusPages []struct {
 			ID int `json:"id"`
 		} `json:"statusPages"`
 	}
-	if err := c.call(ctx, &resp, "getMaintenanceStatusPage", maintenanceID); err != nil {
+	if err := c.Call(ctx, &resp, "getMaintenanceStatusPage", maintenanceID); err != nil {
 		return nil, err
 	}
 	ids := make([]int, 0, len(resp.StatusPages))
@@ -255,7 +258,7 @@ func (c *Client) GetMaintenanceStatusPages(ctx context.Context, maintenanceID in
 
 // normalizeStatusPage fills in the fields saveStatusPage reads without a
 // fallback.
-func normalizeStatusPage(page *StatusPage) {
+func normalizeStatusPage(page *wire.StatusPage) {
 	// updateDomainNameList bails out unless this is an array, leaving the
 	// existing domains untouched instead of clearing them.
 	if page.DomainNameList == nil {

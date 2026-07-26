@@ -10,6 +10,7 @@ import (
 	kumaresource "github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/resource"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -98,49 +99,20 @@ func (p *UptimeKumaProvider) Configure(ctx context.Context, req provider.Configu
 		return
 	}
 
-	endpoint := common.EnvOrDefault(config.Endpoint, "UPTIME_KUMA_URL", "")
-	username := common.EnvOrDefault(config.Username, "UPTIME_KUMA_USERNAME", "")
-	password := common.EnvOrDefault(config.Password, "UPTIME_KUMA_PASSWORD", "")
-	token := common.EnvOrDefault(config.Token, "UPTIME_KUMA_TOKEN", "")
-	timeout := common.EnvOrDefaultInt(config.Timeout, "", 30)
-	maxRetries := common.EnvOrDefaultInt(config.MaxRetries, "", 3)
-	insecure := common.EnvOrDefaultBool(config.InsecureSkipVerify, "", false)
-
-	if endpoint == "" {
-		resp.Diagnostics.AddError(
-			"Missing Uptime Kuma endpoint",
-			"Set the provider's `endpoint` attribute or the UPTIME_KUMA_URL environment variable.",
-		)
-	}
-	// Uptime Kuma has no API-key authentication for its Socket.IO API — the
-	// api_key entity only guards the Prometheus /metrics endpoint — so a
-	// username and password are the only way in.
-	if username == "" || password == "" {
-		resp.Diagnostics.AddError(
-			"Missing Uptime Kuma credentials",
-			"Set the provider's `username` and `password` attributes, or the UPTIME_KUMA_USERNAME and UPTIME_KUMA_PASSWORD environment variables. Uptime Kuma does not support API-key authentication for the API this provider uses.",
-		)
-	}
+	cfg := resolveConfig(config)
+	validateConfig(cfg, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	tflog.Debug(ctx, "Connecting to Uptime Kuma", map[string]any{
-		"endpoint": endpoint,
-		"username": username,
+		"endpoint": cfg.Endpoint,
+		"username": cfg.Username,
 	})
 
 	// Shared, not New: Uptime Kuma allows only 20 logins per minute across the
 	// whole server, and Terraform configures the provider once per command.
-	client, err := kuma.Shared(ctx, kuma.Config{
-		Endpoint:           endpoint,
-		Username:           username,
-		Password:           password,
-		TOTPToken:          token,
-		Timeout:            time.Duration(timeout) * time.Second,
-		MaxRetries:         maxRetries,
-		InsecureSkipVerify: insecure,
-	})
+	client, err := kuma.Shared(ctx, cfg)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to connect to Uptime Kuma", err.Error())
 		return
@@ -148,6 +120,40 @@ func (p *UptimeKumaProvider) Configure(ctx context.Context, req provider.Configu
 
 	resp.DataSourceData = client
 	resp.ResourceData = client
+}
+
+// resolveConfig fills each setting from the configuration, then the environment,
+// then the default.
+func resolveConfig(config UptimeKumaProviderModel) kuma.Config {
+	return kuma.Config{
+		Endpoint:           common.EnvOrDefault(config.Endpoint, "UPTIME_KUMA_URL", ""),
+		Username:           common.EnvOrDefault(config.Username, "UPTIME_KUMA_USERNAME", ""),
+		Password:           common.EnvOrDefault(config.Password, "UPTIME_KUMA_PASSWORD", ""),
+		TOTPToken:          common.EnvOrDefault(config.Token, "UPTIME_KUMA_TOKEN", ""),
+		Timeout:            time.Duration(common.EnvOrDefaultInt(config.Timeout, "", 30)) * time.Second,
+		MaxRetries:         common.EnvOrDefaultInt(config.MaxRetries, "", 3),
+		InsecureSkipVerify: common.EnvOrDefaultBool(config.InsecureSkipVerify, "", false),
+	}
+}
+
+// validateConfig reports everything missing at once, so the user does not have to
+// re-run to find the second problem.
+func validateConfig(cfg kuma.Config, diags *diag.Diagnostics) {
+	if cfg.Endpoint == "" {
+		diags.AddError(
+			"Missing Uptime Kuma endpoint",
+			"Set the provider's `endpoint` attribute or the UPTIME_KUMA_URL environment variable.",
+		)
+	}
+	// Uptime Kuma has no API-key authentication for its Socket.IO API — the
+	// api_key entity only guards the Prometheus /metrics endpoint — so a
+	// username and password are the only way in.
+	if cfg.Username == "" || cfg.Password == "" {
+		diags.AddError(
+			"Missing Uptime Kuma credentials",
+			"Set the provider's `username` and `password` attributes, or the UPTIME_KUMA_USERNAME and UPTIME_KUMA_PASSWORD environment variables. Uptime Kuma does not support API-key authentication for the API this provider uses.",
+		)
+	}
 }
 
 func (p *UptimeKumaProvider) Resources(_ context.Context) []func() resource.Resource {

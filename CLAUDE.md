@@ -50,10 +50,15 @@ cd examples/demo && make demo
 
 ```
 internal/
-  kuma/         # Socket.IO client: connection, RPC, push cache, wire types
+  kuma/         # Facade: aliases and re-exports, so callers need one import
+    client/     #   the session: dialing, login, RPC, the pushed-list cache
+    api/        #   one function per operation, grouped by entity
+    wire/       #   the payloads, their decoding, the cache, error classification
+    transport/  #   the WebSocket, which needs a custom TLS config
   common/       # KumaClient interface (mockable) + Terraform<->wire helpers
   provider/     # Provider config, delegates registration to the aggregators
-  resource/     # resource.go lists them; one subpackage per resource
+  resource/     # resource.go lists them; one subpackage per resource,
+                #   each split into resource.go / schema.go / model.go
     monitor/    #   the shared CRUD cycle plus one file per monitor type
     tag/ notification/ maintenance/
     proxy/ dockerhost/ remotebrowser/ apikey/ settings/
@@ -71,6 +76,18 @@ tools/
 Each resource is its own package so a domain stays self-contained. The `monitor` package covers 9 of Uptime Kuma's 33 monitor types so far.
 
 `internal/resource/resource.go` and `internal/datasource/datasource.go` list everything, so the provider imports two packages instead of twenty.
+
+Each resource package splits into `resource.go` (the CRUD cycle), `schema.go` and `model.go`, following the service-per-resource layout in `.claude/skills/golang/references/terraform-provider.md`.
+
+`internal/kuma` is split into four packages, layered so dependencies only point downwards: `wire` and `transport` import nothing from the project, `api` depends on `wire`, and `client` composes all three.
+
+The `kuma` package itself is a facade. It re-exports the client, the wire types and the sentinel errors, which keeps `kuma.Monitor` and `kuma.Client` working for the ~500 references in `internal/resource` and the tests.
+
+Two things follow from Go's rules, and are worth knowing before moving code between these:
+
+- **Methods can only be declared in their type's own package.** The 65 operations therefore live in `api` as functions over an `api.Caller`, and `client/operations.go` is the delegation that gives `*Client` a method per operation. That delegation is what keeps `common.KumaClient` an interface of methods, and with it the generated mock and every `EXPECT()` in the unit tests.
+
+- **`client` exports primitives it would otherwise keep private** — `Call`, `Mutate`, `EnsureLoaded`, `RefreshList`, `Cache`, `HTTPClient`, `Endpoint` — because `api` needs them. That is the cost of the split.
 
 ## The API this provider talks to
 
@@ -92,9 +109,9 @@ Every one of these was verified against the upstream source, and each shaped the
 
 7. **Booleans arrive as 0 or 1.** Payloads built from database rows (proxies, API keys) are dumped straight to JSON, and SQLite has no boolean type. `kuma.Bool` absorbs that. Without it the pushed lists fail to decode *silently*, and every object looks like it does not exist.
 
-8. **Several entities have no getter event.** Notifications, proxies, Docker hosts and remote browsers only ever arrive by push, so `internal/kuma/cache.go` keeps the lists. `getMonitorList`, `getMaintenanceList` and `getAPIKeyList` acknowledge with a bare `{ok:true}` and deliver the payload on the push channel too.
+8. **Several entities have no getter event.** Notifications, proxies, Docker hosts and remote browsers only ever arrive by push, so `internal/kuma/wire/cache.go` keeps the lists. `getMonitorList`, `getMaintenanceList` and `getAPIKeyList` acknowledge with a bare `{ok:true}` and deliver the payload on the push channel too.
 
-9. **Logins are limited to 20 per minute server-wide.** `internal/kuma/pool.go` shares one session per configuration inside a process, and rate-limit rejections get a slower backoff than other retries.
+9. **Logins are limited to 20 per minute server-wide.** `internal/kuma/client/pool.go` shares one session per configuration inside a process, and rate-limit rejections get a slower backoff than other retries.
 
 10. **`maintenance.dateRange` is always indexed by the server**, whatever the strategy, and `active` is NOT NULL with no default. `NormalizeMaintenance` fills both in.
 
@@ -108,7 +125,7 @@ Every one of these was verified against the upstream source, and each shaped the
 
 ## Adding a monitor type
 
-`internal/resource/monitor/resource.go` handles the whole CRUD cycle. A new type needs:
+`internal/resource/monitor/resource.go` handles the whole CRUD cycle, with the shared schema in `schema.go` and the base model in `model.go`. A new type needs:
 
 1. A model embedding `monitor.BaseModel`, plus `monitor.HTTPBase` for the HTTP-based types.
 
@@ -152,7 +169,7 @@ Wire field names come from `server/model/monitor.js` (`toJSON`). **That format m
 
 - Known issue: that library has reported deadlocks in channel sends and a race on its namespace map. If tests hang or flake in the transport, apply `replace github.com/maldikhan/go.socket.io => github.com/breml/go.socket.io v0.0.0-20260516193936-e70410c8cd31` before suspecting this codebase.
 
-- The library's default logger writes to stdout, which would corrupt the plugin protocol. `internal/kuma/logger.go` redirects everything to tflog.
+- The library's default logger writes to stdout, which would corrupt the plugin protocol. `internal/kuma/transport/logger.go` redirects everything to tflog.
 
 - Linter config: `.golangci.yml`.
 

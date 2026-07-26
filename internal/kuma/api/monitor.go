@@ -1,4 +1,4 @@
-package kuma
+package api
 
 import (
 	"context"
@@ -6,19 +6,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+
+	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma/wire"
 )
 
 // CreateMonitor creates a monitor and returns its ID.
 //
 // The event is called "add", not "addMonitor" (server/server.js:743).
-func (c *Client) CreateMonitor(ctx context.Context, monitor Monitor) (int, error) {
+func CreateMonitor(ctx context.Context, c Caller, monitor wire.Monitor) (int, error) {
 	NormalizeMonitor(&monitor)
 
 	var resp struct {
-		ackEnvelope
+		wire.AckEnvelope
 		MonitorID int `json:"monitorID"`
 	}
-	if err := c.call(ctx, &resp, "add", monitor); err != nil {
+	if err := c.Call(ctx, &resp, "add", monitor); err != nil {
 		return 0, err
 	}
 	if resp.MonitorID == 0 {
@@ -32,81 +34,81 @@ func (c *Client) CreateMonitor(ctx context.Context, monitor Monitor) (int, error
 // editMonitor is a whole-object write, not a patch: the server imports every
 // field it receives, so a partial payload would clear the omitted columns.
 // Callers must start from GetMonitor and modify that.
-func (c *Client) UpdateMonitor(ctx context.Context, monitor Monitor) error {
+func UpdateMonitor(ctx context.Context, c Caller, monitor wire.Monitor) error {
 	if monitor.ID == 0 {
 		return fmt.Errorf("monitor ID is required to update")
 	}
 	NormalizeMonitor(&monitor)
-	return c.call(ctx, nil, "editMonitor", monitor)
+	return c.Call(ctx, nil, "editMonitor", monitor)
 }
 
 // GetMonitor fetches a single monitor. Unlike the list getters, this one returns
 // the payload in the acknowledgement.
-func (c *Client) GetMonitor(ctx context.Context, id int) (*Monitor, error) {
+func GetMonitor(ctx context.Context, c Caller, id int) (*wire.Monitor, error) {
 	var resp struct {
-		ackEnvelope
-		Monitor *Monitor `json:"monitor"`
+		wire.AckEnvelope
+		Monitor *wire.Monitor `json:"monitor"`
 	}
-	if err := c.call(ctx, &resp, "getMonitor", id); err != nil {
+	if err := c.Call(ctx, &resp, "getMonitor", id); err != nil {
 		return nil, err
 	}
 	if resp.Monitor == nil {
-		return nil, ErrNotFound
+		return nil, wire.ErrNotFound
 	}
 	return resp.Monitor, nil
 }
 
 // ListMonitors returns every monitor visible to the authenticated user.
-func (c *Client) ListMonitors(ctx context.Context) (map[int]Monitor, error) {
+func ListMonitors(ctx context.Context, c Caller) (map[int]wire.Monitor, error) {
 	refresh := func(ctx context.Context) error {
-		return c.refreshList(ctx, c.cache.monitors, "getMonitorList")
+		return c.RefreshList(ctx, c.Cache().Monitors, "getMonitorList")
 	}
-	if err := c.ensureLoaded(ctx, c.cache.monitors, refresh); err != nil {
+	if err := c.EnsureLoaded(ctx, c.Cache().Monitors, refresh); err != nil {
 		return nil, err
 	}
-	return c.cache.monitors.all(), nil
+	return c.Cache().Monitors.All(), nil
 }
 
 // DeleteMonitor removes a monitor. deleteChildren decides what happens to the
 // children of a group monitor.
-func (c *Client) DeleteMonitor(ctx context.Context, id int, deleteChildren bool) error {
-	return c.call(ctx, nil, "deleteMonitor", id, deleteChildren)
+func DeleteMonitor(ctx context.Context, c Caller, id int, deleteChildren bool) error {
+	return c.Call(ctx, nil, "deleteMonitor", id, deleteChildren)
 }
 
 // PauseMonitor stops checks without deleting the monitor.
-func (c *Client) PauseMonitor(ctx context.Context, id int) error {
-	return c.call(ctx, nil, "pauseMonitor", id)
+func PauseMonitor(ctx context.Context, c Caller, id int) error {
+	return c.Call(ctx, nil, "pauseMonitor", id)
 }
 
 // ResumeMonitor restarts a paused monitor.
-func (c *Client) ResumeMonitor(ctx context.Context, id int) error {
-	return c.call(ctx, nil, "resumeMonitor", id)
+func ResumeMonitor(ctx context.Context, c Caller, id int) error {
+	return c.Call(ctx, nil, "resumeMonitor", id)
 }
 
 // AddMonitorTag attaches a tag to a monitor, with an optional per-monitor value.
-func (c *Client) AddMonitorTag(ctx context.Context, tagID, monitorID int, value string) error {
-	return c.call(ctx, nil, "addMonitorTag", tagID, monitorID, value)
+func AddMonitorTag(ctx context.Context, c Caller, tagID, monitorID int, value string) error {
+	return c.Call(ctx, nil, "addMonitorTag", tagID, monitorID, value)
 }
 
 // EditMonitorTag updates the value of an already attached tag.
-func (c *Client) EditMonitorTag(ctx context.Context, tagID, monitorID int, value string) error {
-	return c.call(ctx, nil, "editMonitorTag", tagID, monitorID, value)
+func EditMonitorTag(ctx context.Context, c Caller, tagID, monitorID int, value string) error {
+	return c.Call(ctx, nil, "editMonitorTag", tagID, monitorID, value)
 }
 
 // DeleteMonitorTag detaches a tag. The value is part of the identity of the
 // association, so it must match what was stored.
-func (c *Client) DeleteMonitorTag(ctx context.Context, tagID, monitorID int, value string) error {
-	return c.call(ctx, nil, "deleteMonitorTag", tagID, monitorID, value)
+func DeleteMonitorTag(ctx context.Context, c Caller, tagID, monitorID int, value string) error {
+	return c.Call(ctx, nil, "deleteMonitorTag", tagID, monitorID, value)
 }
 
 // MinIntervalSeconds is the smallest interval the server accepts, for both
-// `interval` and `retryInterval` (Monitor.validate in server/model/monitor.js).
+// `interval` and `retryInterval` (wire.Monitor.validate in server/model/monitor.js).
 const MinIntervalSeconds = 1
 
 // NormalizeMonitor fills in the fields the server dereferences or validates
 // without a default, so a valid Terraform config cannot produce a JavaScript
 // TypeError or a validation error about a field the user never set.
-func NormalizeMonitor(monitor *Monitor) {
+func NormalizeMonitor(monitor *wire.Monitor) {
 	// `add` iterates accepted_statuscodes before storing and rejects any
 	// non-string entry (server/server.js:751). An absent array throws.
 	if monitor.AcceptedStatusCodes == nil {

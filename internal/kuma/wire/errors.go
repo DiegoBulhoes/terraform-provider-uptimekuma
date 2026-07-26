@@ -1,4 +1,4 @@
-package kuma
+package wire
 
 import (
 	"errors"
