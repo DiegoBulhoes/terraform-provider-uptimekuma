@@ -5,8 +5,10 @@ GO            = go
 KUMA_VERSIONS ?= 2.2.1 2.3.2 2.4.0
 
 ## ── All (CI pipeline) ───────────────────────────────────────────
+# test runs the version matrix; coverage measures one version and gates on the
+# result. Both, because compatibility and coverage are separate questions.
 .PHONY: all
-all: tidy lint security test build docs
+all: tidy lint security test coverage build docs
 
 ## ── Build & Install ─────────────────────────────────────────────
 .PHONY: build

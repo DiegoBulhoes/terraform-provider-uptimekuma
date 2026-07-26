@@ -144,10 +144,34 @@ jobs:
         # running them concurrently starves the runner into timeouts.
         run: go test -p 1 -tags integration -timeout 900s -coverpkg=./internal/... ./test/integration/...
 
+  coverage:
+    name: Coverage Gate
+    runs-on: ubuntu-latest
+    needs: [unit]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Measure and enforce combined coverage
+        env:
+          UPTIME_KUMA_IMAGE: "louislam/uptime-kuma:2.4.0"
+        run: make coverage
+
+      - name: Show the least covered functions
+        if: failure()
+        run: make coverage-gaps
+
   goreleaser:
     name: GoReleaser
     runs-on: ubuntu-latest
-    needs: [version, acceptance]
+    needs: [version, acceptance, coverage]
     steps:
       - uses: actions/checkout@v6
         with:
