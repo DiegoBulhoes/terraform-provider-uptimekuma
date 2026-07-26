@@ -68,7 +68,7 @@ tools/
   kuma-bootstrap/  # Creates the first admin user on a fresh instance
 ```
 
-Each resource is its own package so a domain stays self-contained. The `monitor` package alone will grow to cover all 33 Uptime Kuma monitor types.
+Each resource is its own package so a domain stays self-contained. The `monitor` package covers 9 of Uptime Kuma's 33 monitor types so far.
 
 `internal/resource/resource.go` and `internal/datasource/datasource.go` list everything, so the provider imports two packages instead of twenty.
 
@@ -76,7 +76,7 @@ Each resource is its own package so a domain stays self-contained. The `monitor`
 
 **Uptime Kuma has no REST API for writes.** Everything is Socket.IO events.
 
-These facts shaped the code, and all of them were verified against the upstream source:
+Every one of these was verified against the upstream source, and each shaped the code:
 
 1. **Creating a monitor is the `add` event**, not `addMonitor` (`server/server.js`).
 
@@ -98,7 +98,7 @@ These facts shaped the code, and all of them were verified against the upstream 
 
 10. **`maintenance.dateRange` is always indexed by the server**, whatever the strategy, and `active` is NOT NULL with no default. `NormalizeMaintenance` fills both in.
 
-11. **Optional fields need `omitempty`, for compatibility.** On create the server feeds the payload to `bean.import()`, which turns each key into a column in the INSERT. Sending `"bearer_token": null` to a version that predates that column fails the whole statement. Omitting absent fields keeps one payload working across 2.2 to 2.4.
+11. **Optional fields need `omitempty` for compatibility.** On create the server feeds the payload to `bean.import()`, which turns each key into a column in the INSERT. Sending `"bearer_token": null` to a version that predates that column fails the whole statement. Omitting absent fields keeps one payload working across 2.2 to 2.4. The exception is a field a user can clear — a proxy's credentials, an API key's expiry — where null is the only way to empty it, and the column has existed since 1.x anyway. `TestOptionalFieldsAreOmittedForTheOtherEntities` holds that list.
 
 12. **Updates are built from the plan, not merged onto the server's copy.** Merging looks safer but makes removing an attribute impossible: a deleted value arrives as null, leaves the wire struct untouched, and the old value gets written straight back.
 
@@ -128,7 +128,7 @@ Wire field names come from `server/model/monitor.js` (`toJSON`). **That format m
 
 - Each package splits its unit tests into `happy_test.go`, `sad_test.go` and `absurd_test.go`. The absurd ones matter more than usual here: `settings` and `notification` take raw JSON from the user, and pushed lists are decoded where no error can be returned.
 
-- **Acceptance tests** (`test/integration/`) are behind `//go:build integration` and use real containers. Run them with `-p 1`: each package starts its own container.
+- **Acceptance tests** (`test/integration/`) are behind `//go:build integration` and use real containers. Run them with `-p 1`: each package starts its own container, and three at once starve each other into timeouts.
 
 - `test/integration/kuma` exercises the client directly, and is the first thing to run when something breaks.
 

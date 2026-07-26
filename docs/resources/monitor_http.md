@@ -43,7 +43,7 @@ resource "uptimekuma_monitor_http" "api" {
 - `bearer_token` (String, Sensitive) Token for `bearer` authentication.
 - `body` (String) Request body.
 - `cache_bust` (Boolean) Append a cache-busting query parameter to each request. Default: false.
-- `description` (String) Free-form description of the monitor.
+- `description` (String) Description of the monitor.
 - `domain_expiry_notification` (Boolean) Notify before the domain registration expires. Default: false.
 - `expiry_notification` (Boolean) Notify before the TLS certificate expires. Default: true.
 - `headers` (String) Additional request headers, as a JSON object string. Uptime Kuma validates that this parses as JSON.

@@ -24,8 +24,10 @@ The container stays up until you run `make down`.
 |---|---|
 | `make demo` | Everything below, in order. Start here. |
 | `make up` | Start Uptime Kuma and create the admin user |
+| `make init` | Register the local modules |
 | `make apply` | Build the provider and apply `main.tf` |
 | `make plan` | Show what would change |
+| `make verify` | Apply, prove the next plan is empty, then destroy. This is what CI runs. |
 | `make show` | Print the outputs again |
 | `make destroy` | Remove what Terraform created; the container stays up |
 | `make down` | Stop the container and delete its data |
@@ -34,9 +36,25 @@ The container stays up until you run `make down`.
 
 Override the defaults with variables: `make demo KUMA_PORT=3005 KUMA_VERSION=2.3.2`.
 
+## Layout
+
+The configuration is split into modules under `modules/`, each one a small example you can read on its own:
+
+| Module | What it holds |
+|---|---|
+| `tags` | The two tags every monitor uses |
+| `notifications` | Six channels, one per notification type |
+| `infrastructure` | Proxy, Docker host, remote browser, API key |
+| `monitors` | All 12 monitors, including the two groups |
+| `status-page` | The page, its groups, and the pinned incident |
+| `maintenance` | Three windows, one per scheduling strategy |
+| `settings` | The instance settings this demo manages |
+
+Each module declares its own `required_providers`. Without that, Terraform assumes `hashicorp/uptimekuma` and the plan fails on a provider that does not exist.
+
 ## What gets created
 
-24 objects: 12 monitors, 2 tags, 2 notification channels, 3 maintenance windows, a proxy, a Docker host, a remote browser, an API key, and the instance settings.
+30 objects: 12 monitors, 6 notification channels, 3 maintenance windows, 2 tags, a status page with an incident, a proxy, a Docker host, a remote browser, an API key, and the instance settings.
 
 Four monitors go green with no internet access, because they watch the demo instance itself:
 

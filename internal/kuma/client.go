@@ -83,7 +83,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 }
 
 // NewUnauthenticated connects without logging in, for the handful of events that
-// work on an uninitialised instance: needSetup and setup.
+// work on an uninitialized instance: needSetup and setup.
 func NewUnauthenticated(ctx context.Context, cfg Config) (*Client, error) {
 	return newClient(ctx, cfg, true)
 }

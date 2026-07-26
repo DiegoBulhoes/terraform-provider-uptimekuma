@@ -66,7 +66,7 @@ func (d *ListDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 					Attributes: map[string]schema.Attribute{
 						"id":          schema.StringAttribute{Computed: true, Description: "Numeric ID of the window."},
 						"title":       schema.StringAttribute{Computed: true, Description: "Title of the window."},
-						"description": schema.StringAttribute{Computed: true, Description: "Description of the window."},
+						"description": schema.StringAttribute{Computed: true, Description: "Description of the maintenance."},
 						"strategy":    schema.StringAttribute{Computed: true, Description: "Scheduling strategy."},
 						"active":      schema.BoolAttribute{Computed: true, Description: "Whether the window is active."},
 						"status":      schema.StringAttribute{Computed: true, Description: "Server-computed status."},

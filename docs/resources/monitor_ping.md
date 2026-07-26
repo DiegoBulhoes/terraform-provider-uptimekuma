@@ -31,7 +31,7 @@ resource "uptimekuma_monitor_ping" "gateway" {
 ### Optional
 
 - `active` (Boolean) Whether the monitor is running. Set to false to pause it. Default: true.
-- `description` (String) Free-form description of the monitor.
+- `description` (String) Description of the monitor.
 - `interval` (Number) Seconds between checks. Default: 60.
 - `ip_family` (String) Force an address family: `ipv4` or `ipv6`. Leave unset to let the resolver choose.
 - `max_retries` (Number) How many times to retry before marking the monitor down. Default: 0.

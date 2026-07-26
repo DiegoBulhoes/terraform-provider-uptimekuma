@@ -41,7 +41,7 @@ output "groups" {
 ### Read-Only
 
 - `description` (String) Description of the page.
-- `domain_names` (List of String) Custom domains serving this page.
+- `domain_names` (List of String) Custom domains that serve this page.
 - `groups` (Attributes List) Groups on the page, in display order. (see [below for nested schema](#nestedatt--groups))
 - `page_id` (Number) Numeric ID of the page, for `uptimekuma_maintenance.status_page_ids`.
 - `published` (Boolean) Whether the page is published.

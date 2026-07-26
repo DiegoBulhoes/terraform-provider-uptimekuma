@@ -83,7 +83,7 @@ func (d *DataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp 
 			"published":   schema.BoolAttribute{Computed: true, Description: "Whether the page is published."},
 			"show_tags":   schema.BoolAttribute{Computed: true, Description: "Whether monitor tags are shown."},
 			"domain_names": schema.ListAttribute{
-				Description: "Custom domains serving this page.",
+				Description: "Custom domains that serve this page.",
 				Computed:    true,
 				ElementType: types.StringType,
 			},

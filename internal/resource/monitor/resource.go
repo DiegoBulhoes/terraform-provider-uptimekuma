@@ -166,7 +166,7 @@ func baseAttributes() map[string]schema.Attribute {
 			Required:    true,
 		},
 		"description": schema.StringAttribute{
-			Description: "Free-form description of the monitor.",
+			Description: "Description of the monitor.",
 			Optional:    true,
 		},
 		"active": schema.BoolAttribute{

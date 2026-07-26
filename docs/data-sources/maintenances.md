@@ -36,7 +36,7 @@ output "active_maintenance_titles" {
 Read-Only:
 
 - `active` (Boolean) Whether the window is active.
-- `description` (String) Description of the window.
+- `description` (String) Description of the maintenance.
 - `id` (String) Numeric ID of the window.
 - `status` (String) Server-computed status.
 - `strategy` (String) Scheduling strategy.

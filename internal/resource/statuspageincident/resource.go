@@ -101,7 +101,7 @@ func (r *Resource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Required:    true,
 			},
 			"style": schema.StringAttribute{
-				Description: "Colour of the banner: `info`, `warning`, `danger`, `primary`, `light` or `dark`. " +
+				Description: "Color of the banner: `info`, `warning`, `danger`, `primary`, `light` or `dark`. " +
 					"Default: `warning`.",
 				Optional: true,
 				Computed: true,

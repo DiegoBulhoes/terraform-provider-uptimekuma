@@ -61,13 +61,13 @@ The provider also reads `UPTIME_KUMA_URL`, `UPTIME_KUMA_USERNAME`, `UPTIME_KUMA_
 cd examples/demo && make demo
 ```
 
-That starts Uptime Kuma in Docker and applies a configuration that uses every resource and data source.
+That starts Uptime Kuma in Docker and applies a configuration that uses every resource and data source, split into one module per area.
 
 See [examples/demo](examples/demo).
 
 ## Resources
 
-**Monitors** — one resource per Uptime Kuma monitor type, so each one exposes only the attributes that apply to it:
+**Monitors** — one resource per Uptime Kuma monitor type, so each exposes only the attributes that apply to it:
 
 `uptimekuma_monitor_http` · `uptimekuma_monitor_keyword` · `uptimekuma_monitor_json_query` · `uptimekuma_monitor_ping` · `uptimekuma_monitor_port` · `uptimekuma_monitor_dns` · `uptimekuma_monitor_push` · `uptimekuma_monitor_group` · `uptimekuma_monitor_docker`
 
@@ -89,7 +89,7 @@ Everything else goes over Socket.IO, so the provider keeps a long-lived authenti
 
 A few things follow from that:
 
-- **Logins are limited to 20 per minute for the whole server.** Each Terraform command spends one. The provider retries with backoff and reuses the session inside a process, but many workspaces running against one instance in parallel can still hit the limit.
+- **Logins are limited to 20 per minute for the whole server.** Each Terraform command uses one. The provider retries with backoff and shares one session per configuration inside a process, but many workspaces running against a single instance in parallel can still hit the limit.
 
 - **Some objects have no read event.** The server only pushes notifications, proxies, Docker hosts and remote browsers, so the provider keeps the pushed lists and reads from them.
 
@@ -101,7 +101,9 @@ A few things follow from that:
 
 - **A fresh 2.x instance needs its database chosen first.** On first boot the server stops at a database-selection screen, and the real API does not exist yet. Set `UPTIME_KUMA_DB_TYPE=sqlite` on the server, or finish that step in the UI, before you point Terraform at it.
 
-**Uptime Kuma 1.x is not supported.** Tested against 2.2, 2.3 and 2.4.
+**Uptime Kuma 1.x is not supported.**
+
+Tested against 2.2, 2.3 and 2.4.
 
 **API keys are not credentials for this provider.**
 
@@ -112,10 +114,11 @@ The API this provider uses takes only a username and password.
 ## Development
 
 ```bash
-make ci          # everything CI checks, without changing files
+make ci          # every check CI runs, without changing files
 make build       # compile the provider
 make test        # unit tests plus acceptance tests against Uptime Kuma 2.2-2.4
 make docs        # regenerate docs/ from the schema, templates/ and examples/
+make coverage    # unit plus acceptance coverage, merged; fails below 95%
 ```
 
 Acceptance tests need Docker and Terraform on `PATH`.
@@ -132,4 +135,4 @@ Change `templates/` and `examples/`, then run `make docs`.
 
 ## License
 
-Apache — see [LICENSE](LICENSE).
+Apache 2.0 — see [LICENSE](LICENSE).

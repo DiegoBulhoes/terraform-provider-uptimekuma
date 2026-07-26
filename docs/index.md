@@ -41,7 +41,7 @@ variable "uptime_kuma_password" {
 
 ## Authentication
 
-Configure the provider with attributes, or with environment variables:
+Configure the provider with attributes or environment variables:
 
 | Attribute              | Environment Variable     | Default    |
 |------------------------|--------------------------|------------|
@@ -57,15 +57,15 @@ When an attribute is not set, the provider falls back to the environment variabl
 
 ~> **There is no API-key authentication.** Uptime Kuma's `api_key` objects only authenticate the Prometheus `/metrics` endpoint. The API this provider uses takes nothing but a username and password, so `uptimekuma_api_key` does not give Terraform another way to connect.
 
-~> **Two-factor authentication does not suit automation.** A TOTP code is single-use, so `token` has to be a fresh value on every run. Prefer an account without 2FA for Terraform.
+~> **Two-factor authentication does not suit automation.** A TOTP code works once, so `token` needs a fresh code on every run. Use an account without 2FA for Terraform.
 
 ## How the provider talks to Uptime Kuma
 
 Uptime Kuma exposes **no REST API for writes**. Its only HTTP endpoints are the read-only status-page and badge routes.
 
-Everything this provider does goes over **Socket.IO**, on a long-lived authenticated connection. Three consequences are worth knowing about:
+Everything this provider does goes over **Socket.IO**, on a long-lived authenticated connection. Three consequences follow:
 
-- **Logins are limited to 20 per minute for the whole server.** Each Terraform command logs in once. Running many workspaces against one instance in parallel can hit the limit; the provider retries with backoff, and `max_retries` controls how hard it tries.
+- **Logins are limited to 20 per minute for the whole server.** Each Terraform command logs in once, so running many workspaces against one instance in parallel can hit the limit. The provider retries with backoff, and `max_retries` sets how many times.
 
 - **Several objects have no getter event.** The server only pushes notifications, proxies, Docker hosts and remote browsers, so the provider keeps the pushed lists and reads from them.
 
@@ -73,7 +73,7 @@ Everything this provider does goes over **Socket.IO**, on a long-lived authentic
 
 ## Monitor types
 
-Each Uptime Kuma monitor type is its own resource, so only the attributes that apply to that type are available, and mistakes show up at plan time:
+Each Uptime Kuma monitor type is its own resource, so each one exposes only the attributes that apply to it and mistakes show up at plan time:
 
 | Resource | Uptime Kuma type |
 |---|---|
@@ -87,23 +87,23 @@ Each Uptime Kuma monitor type is its own resource, so only the attributes that a
 | `uptimekuma_monitor_group` | Group |
 | `uptimekuma_monitor_docker` | Docker Container |
 
-Uptime Kuma supports more types — databases, message brokers, SNMP, NTP, games and others — which are not implemented yet.
+Uptime Kuma supports more types — databases, message brokers, SNMP, NTP, games and others. The provider does not cover them yet.
 
 ## Status pages
 
-`uptimekuma_status_page` declares the page and the whole tree of groups shown on it, and `uptimekuma_status_page_incident` manages the banner pinned to the top.
+`uptimekuma_status_page` declares the page and the whole tree of groups shown on it. `uptimekuma_status_page_incident` manages the banner pinned to the top.
 
-Two things about status pages differ from the rest of the provider:
+Status pages differ from the rest of the provider in two ways:
 
 - **The slug is the identifier, not a number.** Every event addresses a page by slug, so that is the Terraform ID and what `terraform import` takes. The numeric ID is exposed as `page_id`, which is what `uptimekuma_maintenance.status_page_ids` needs.
 
-- **Reading the groups uses HTTP.** No Socket.IO event returns them, so the provider reads `GET /api/status-page/<slug>`. That route is cached for five minutes server-side; saving clears the cache, but a plain refresh can see slightly stale groups.
+- **Reading the groups uses HTTP.** No Socket.IO event returns them, so the provider reads `GET /api/status-page/<slug>`. The server caches that route for five minutes. Saving clears the cache, but a plain refresh can see slightly stale groups.
 
 ## Known Limitations
 
 - **`uptimekuma_api_key` secrets cannot be recovered.** Uptime Kuma stores only a hash and returns the clear-text key once, at creation. An imported key has a null `key`.
 
-- **`uptimekuma_settings` is a singleton and cannot be deleted.** It adopts the current settings on create and manages only the keys you list. Destroying it leaves the values in place. The provider refuses to manage `disableAuth`, because turning it on disconnects every client, this provider included, mid-apply.
+- **`uptimekuma_settings` is a singleton and cannot be deleted.** The resource adopts the current settings on create and manages only the keys you list. Destroying it leaves the values in place. The provider refuses to manage `disableAuth`, because turning it on disconnects every client, this provider included, mid-apply.
 
 - **Monitor and maintenance associations are replace-all.** `notification_ids`, `tags` and a maintenance window's `monitor_ids` are reconciled to exactly what the configuration says.
 
@@ -111,7 +111,7 @@ Two things about status pages differ from the rest of the provider:
 
 - **Pausing is a separate operation.** `active` is applied through the pause and resume events, because the update event does not write that field.
 
-- **A status page's `published` flag, search-engine-index setting and password cannot be managed.** The handler that saves a page has those three assignments commented out upstream, so no API client can change them. Set them in the web UI.
+- **A status page's `published` flag, search-engine-index setting and password cannot be managed.** Upstream, the handler that saves a page has those three assignments commented out, so no API client can change them. Set them in the web UI.
 
 - **A page shows one incident at a time.** Posting an incident pins it and unpins the previous one, so two `uptimekuma_status_page_incident` resources on the same page leave only the last one visible.
 
@@ -128,7 +128,7 @@ Two things about status pages differ from the rest of the provider:
 
 Uptime Kuma 1.x is not supported: its API differs, and the provider is not tested against it.
 
-~> **A fresh Uptime Kuma 2.x instance needs its database chosen first.** On first boot the server stops at a database-selection step, and the real API does not exist yet. Set `UPTIME_KUMA_DB_TYPE=sqlite`, or the equivalent for your backend, on the server — or finish the step in the web UI — before you point Terraform at it.
+~> **A fresh Uptime Kuma 2.x instance needs its database chosen first.** On first boot the server stops at a database-selection step, and the real API does not exist yet. Set `UPTIME_KUMA_DB_TYPE=sqlite` on the server, or the equivalent for your backend. Finishing the step in the web UI works too. Either way, do it before you point Terraform at the instance.
 
 <!-- schema generated by tfplugindocs -->
 ## Schema

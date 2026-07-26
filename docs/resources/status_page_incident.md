@@ -47,7 +47,7 @@ resource "uptimekuma_status_page_incident" "degraded" {
 ### Optional
 
 - `pinned` (Boolean) Whether the banner is visible. Setting this to false resolves the incident, which keeps it in the page's history. Default: true.
-- `style` (String) Colour of the banner: `info`, `warning`, `danger`, `primary`, `light` or `dark`. Default: `warning`.
+- `style` (String) Color of the banner: `info`, `warning`, `danger`, `primary`, `light` or `dark`. Default: `warning`.
 
 ### Read-Only
 

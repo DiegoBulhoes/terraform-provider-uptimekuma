@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Go 1.26.5 or newer, the version in `go.mod`. `GOTOOLCHAIN=auto` fetches it for you.
+- Go 1.26.5 or newer — the version in `go.mod`. `GOTOOLCHAIN=auto` fetches it for you.
 - Docker, for the acceptance tests.
 - Terraform on `PATH`, for the acceptance tests and for `tfplugindocs`.
 
@@ -10,7 +10,7 @@
 
 | Directory | Build tag | What it covers |
 |---|---|---|
-| `test/unit/kuma` | — | Wire decoding and error classification |
+| `test/unit/kuma` | — | Wire decoding, error classification, regressions |
 | `test/unit/common` | — | Terraform ↔ wire conversions, retry logic |
 | `test/unit/provider` | — | Every resource and data source schema |
 | `test/unit/resource` | — | Payload building, validation, client call sequences |
@@ -18,7 +18,7 @@
 | `test/integration/resource` | `integration` | Resources, through real Terraform plans |
 | `test/integration/datasource` | `integration` | Data sources, through real Terraform plans |
 
-Unit tests come in three flavours, each in its own file:
+Unit tests come in three flavors, each in its own file:
 
 - **`happy_test.go`** — the shapes and values a working setup produces.
 - **`sad_test.go`** — the server said no, or the connection did. Each failure has to land in the right bucket, because the bucket decides whether the provider retries, drops the object from state, or gives up.
@@ -76,7 +76,7 @@ A fresh Uptime Kuma 2.x boots into a database-selection step and serves only a s
 
 The real Socket.IO API does not exist yet, so without that variable the tests hang waiting for a handshake that never comes.
 
-State left over from an earlier run makes tests fail in confusing ways: duplicate names, list counts that do not add up.
+State left over from an earlier run makes tests fail in confusing ways: duplicate names, or list counts that do not add up.
 
 Recreate the container when that happens:
 
@@ -142,7 +142,7 @@ Compare what `getMonitor` returns against what the model writes.
 
 ## Coverage
 
-**The project requires combined coverage above 95%.** `make coverage` measures it and fails below that; the CI has a job that does the same.
+**The project requires combined coverage above 95%.** `make coverage` measures it and fails below that. CI has a job that does the same.
 
 ```bash
 make coverage        # both suites, merged, then checked against the minimum
@@ -159,10 +159,24 @@ Combined is the only number that means anything here. Neither suite reaches the 
 
 ### Writing for the number, and not
 
-Chasing the last few points is how coverage stops being useful. Two rules that kept it honest here:
+Chasing the last few points is how coverage stops being useful.
+
+Two rules kept it honest here:
 
 - Prefer tests that walk a registry over tests that name one resource. `TestEveryOperationStopsOnAnUndecodableModel` covers a guard in every CRUD method of every resource, and covers the next resource for free.
 
-- If a test can only be written by asserting that Go propagates an error, say what the guard prevents instead — and if nothing can be said, the guard may be the thing to change rather than the test to add.
+- If a test can only be written by asserting that Go propagates an error, say what the guard prevents instead. If nothing can be said, the guard may be what needs changing, not the test.
 
-Every test in this suite that was added purely for the number is one that found a bug: the panic on a nil base context, `null` accepted as a settings document, an empty slug reaching the server as a request for no page at all.
+Writing tests for the number did find real bugs: a panic on a nil base context, `null` accepted as a settings document, and an empty slug reaching the server as a request for the incidents of no page at all.
+
+Every one of them came from a test covering real logic, and none from a test covering an `if err != nil`. That is worth remembering when picking the next gap to close.
+
+### Regression tests
+
+`test/unit/kuma/regression_test.go` and `basecontext_test.go` hold the tests for bugs this project has already had.
+
+They are grouped there because none of them belongs to a single method — each is a property of the package.
+
+Each names the failure it prevents rather than the code it covers, so reintroducing the bug produces a message that explains it.
+
+Check that when adding one: break the fix on purpose and read what the test says.
