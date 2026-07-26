@@ -3,6 +3,7 @@ package kuma_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 )
@@ -273,6 +274,48 @@ func TestHappyAcknowledgements(t *testing.T) {
 		}
 		if !need {
 			t.Error("needSetup should be true")
+		}
+	})
+}
+
+// TestHappyConnectBackoff covers the backoff schedule, which has to treat rate
+// limiting differently from other failures.
+func TestHappyConnectBackoff(t *testing.T) {
+	t.Parallel()
+
+	rateLimited := error(&kuma.APIError{Event: "login", Msg: "Too frequently, try again later."})
+
+	t.Run("rate limiting waits longer than plain backoff", func(t *testing.T) {
+		t.Parallel()
+
+		// The limiter refills roughly one token every three seconds, so the
+		// ordinary 1s/2s/4s schedule would burn every attempt inside a single
+		// window.
+		ordinary := kuma.ConnectBackoffForTest(1, kuma.ErrTimeout)
+		limited := kuma.ConnectBackoffForTest(1, rateLimited)
+		if limited <= ordinary {
+			t.Errorf("rate-limited wait %v should exceed the ordinary %v", limited, ordinary)
+		}
+	})
+
+	t.Run("ordinary backoff doubles", func(t *testing.T) {
+		t.Parallel()
+
+		first := kuma.ConnectBackoffForTest(1, kuma.ErrTimeout)
+		second := kuma.ConnectBackoffForTest(2, kuma.ErrTimeout)
+		third := kuma.ConnectBackoffForTest(3, kuma.ErrTimeout)
+		if second != 2*first || third != 4*first {
+			t.Errorf("expected doubling, got %v, %v, %v", first, second, third)
+		}
+	})
+
+	t.Run("the rate-limited wait is capped", func(t *testing.T) {
+		t.Parallel()
+
+		// Without a cap a late attempt would wait minutes.
+		capped := kuma.ConnectBackoffForTest(100, rateLimited)
+		if capped > 30*time.Second {
+			t.Errorf("wait %v exceeds the 30s cap", capped)
 		}
 	})
 }

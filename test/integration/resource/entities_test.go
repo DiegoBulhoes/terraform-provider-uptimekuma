@@ -315,6 +315,21 @@ resource "uptimekuma_monitor_docker" "test" {
 				),
 			},
 			{
+				// Switching connection type and daemon in place.
+				Config: acctest.ProviderConfig() + `
+resource "uptimekuma_docker_host" "test" {
+  name            = "acc-docker-renamed"
+  connection_type = "tcp"
+  daemon          = "tcp://docker.example.com:2375"
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("uptimekuma_docker_host.test", "name", "acc-docker-renamed"),
+					resource.TestCheckResourceAttr("uptimekuma_docker_host.test", "connection_type", "tcp"),
+					resource.TestCheckResourceAttr("uptimekuma_docker_host.test", "daemon", "tcp://docker.example.com:2375"),
+				),
+			},
+			{
 				ResourceName:      "uptimekuma_docker_host.test",
 				ImportState:       true,
 				ImportStateVerify: true,
@@ -339,6 +354,18 @@ resource "uptimekuma_remote_browser" "test" {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("uptimekuma_remote_browser.test", "name", "acc-browser"),
 					resource.TestCheckResourceAttr("uptimekuma_remote_browser.test", "url", "ws://chrome:3000"),
+				),
+			},
+			{
+				Config: acctest.ProviderConfig() + `
+resource "uptimekuma_remote_browser" "test" {
+  name = "acc-browser-renamed"
+  url  = "ws://chrome-2.example.com:3000"
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("uptimekuma_remote_browser.test", "name", "acc-browser-renamed"),
+					resource.TestCheckResourceAttr("uptimekuma_remote_browser.test", "url", "ws://chrome-2.example.com:3000"),
 				),
 			},
 			{
@@ -384,6 +411,14 @@ resource "uptimekuma_api_key" "test" {
 					resource.TestCheckResourceAttr("uptimekuma_api_key.test", "status", "inactive"),
 					resource.TestCheckResourceAttrSet("uptimekuma_api_key.test", "key"),
 				),
+			},
+			{
+				ResourceName:      "uptimekuma_api_key.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				// The clear-text key exists only in the creation response, so an
+				// imported key cannot have it.
+				ImportStateVerifyIgnore: []string{"key"},
 			},
 		},
 	})

@@ -89,6 +89,20 @@ func NewUnauthenticated(ctx context.Context, cfg Config) (*Client, error) {
 }
 
 func newClient(ctx context.Context, cfg Config, skipAuth bool) (*Client, error) {
+	c, err := buildClient(ctx, cfg, skipAuth)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := c.session(ctx); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// buildClient assembles a client without dialing. It is separate from newClient
+// so the invariants it establishes — a cache and a base context are always
+// present — can be checked without a server to connect to.
+func buildClient(ctx context.Context, cfg Config, skipAuth bool) (*Client, error) {
 	if cfg.Endpoint == "" {
 		return nil, errors.New("endpoint is required")
 	}
@@ -99,17 +113,15 @@ func newClient(ctx context.Context, cfg Config, skipAuth bool) (*Client, error) 
 		cfg.MaxRetries = 0
 	}
 
-	c := &Client{
-		cfg:      cfg,
-		cache:    newCache(),
+	return &Client{
+		cfg:   cfg,
+		cache: newCache(),
+		// Detached from the caller's context on purpose: the socket has to outlive
+		// the Terraform operation that opened it. It must never be nil — dialing
+		// derives the connection context from it.
 		baseCtx:  context.WithoutCancel(ctx),
 		skipAuth: skipAuth,
-	}
-
-	if _, err := c.session(ctx); err != nil {
-		return nil, err
-	}
-	return c, nil
+	}, nil
 }
 
 // Close tears down the session.
@@ -210,7 +222,15 @@ func (c *Client) connectLocked(ctx context.Context) error {
 	// in the URL path would break the handshake.
 	endpoint.Path = "/socket.io/"
 
-	connCtx, cancel := context.WithCancel(c.baseCtx)
+	// baseCtx outlives the request that triggered this dial, because the socket
+	// has to stay up between Terraform operations. A nil one would panic here and
+	// take the whole provider process down, so it falls back rather than trusting
+	// the constructor.
+	baseCtx := c.baseCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	connCtx, cancel := context.WithCancel(baseCtx)
 	c.cancel = cancel
 
 	log := &logger{ctx: connCtx}

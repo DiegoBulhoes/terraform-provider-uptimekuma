@@ -195,6 +195,13 @@ resource "uptimekuma_status_page_incident" "test" {
 					resource.TestCheckResourceAttr("uptimekuma_status_page_incident.test", "active", "false"),
 				),
 			},
+			{
+				// Imported as <slug>/<incident id>, which is the composite ID.
+				ResourceName:            "uptimekuma_status_page_incident.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"pinned"},
+			},
 		},
 	})
 }

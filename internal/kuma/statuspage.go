@@ -146,7 +146,8 @@ func (c *Client) GetStatusPageGroups(ctx context.Context, slug string) ([]Status
 // per minute, so callers should not do it in a loop.
 func (c *Client) ListStatusPages(ctx context.Context, refresh bool) (map[int]StatusPage, error) {
 	if refresh {
-		c.markUnhealthy()
+		// Dropping the cache is enough: ensureLoaded reconnects when a
+		// push-only list is missing, and afterLogin then resends it.
 		c.cache.statusPages.invalidate()
 	}
 	if err := c.ensureLoaded(ctx, c.cache.statusPages, nil); err != nil {

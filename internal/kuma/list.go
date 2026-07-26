@@ -15,9 +15,14 @@ type pushedList interface {
 // ensureLoaded makes sure a pushed list has been received at least once.
 //
 // For entities with a getter, refresh emits it. For the others — notifications,
-// proxies, docker hosts, remote browsers — there is no getter at all: the server
-// only pushes those lists as part of afterLogin, so the best available action is
-// to make sure a session exists and then wait for the push.
+// proxies, docker hosts and remote browsers — there is no getter at all. The
+// server sends those lists exactly once, during afterLogin, so the only way to
+// get them again is to log in again: this drops the session so that session()
+// reconnects, which makes the server run afterLogin and push everything afresh.
+//
+// That costs one login against the server's limit of 20 per minute, which is why
+// it only happens when the list is genuinely absent. In normal use it never runs:
+// the lists arrive with the first login and stay loaded.
 func (c *Client) ensureLoaded(ctx context.Context, list pushedList, refresh func(context.Context) error) error {
 	if list.isLoaded() {
 		return nil
@@ -31,8 +36,12 @@ func (c *Client) ensureLoaded(ctx context.Context, list pushedList, refresh func
 		if err := refresh(ctx); err != nil {
 			return err
 		}
-	} else if _, err := c.session(ctx); err != nil {
-		return err
+	} else {
+		// No getter exists, so force a reconnect and let afterLogin resend.
+		c.markUnhealthy()
+		if _, err := c.session(ctx); err != nil {
+			return err
+		}
 	}
 
 	if list.isLoaded() {
