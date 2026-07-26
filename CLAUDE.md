@@ -138,7 +138,9 @@ Wire field names come from `server/model/monitor.js` (`toJSON`). **That format m
 
 - **Combined coverage must stay above 95%**, measured by `make coverage`, which merges the two suites with `go tool covdata`. Neither suite reaches it alone and neither should: acceptance tests cover the wire format, unit tests cover what a healthy server will not produce on demand. When adding a test for the number, prefer one that walks a registry over one that names a single resource — see `TESTING.md`.
 
-- **A panic is worse than an error here.** It kills the plugin process, and the framework reports a crash with no resource address while an operation is left half-applied. `test/unit/kuma/basecontext_test.go` covers the one instance found so far: `connectLocked` derived the connection context from `c.baseCtx`, and `context.WithCancel(nil)` panics. The guard makes it fail cleanly, and `TestEveryClientHasABaseContext` covers the root cause — no constructor may leave that field nil. Add a similar root-cause test for any panic found later, not just a guard.
+- Regression tests live in `test/unit/kuma/regression_test.go` and `basecontext_test.go`. Each names the failure it prevents, so reintroducing the bug produces a message that explains it.
+
+- **A panic is worse than an error here**: it kills the plugin process, and the framework reports a crash with no resource address while an operation is left half-applied. Cover the root cause, not just the guard.
 
 ## Code Style
 
