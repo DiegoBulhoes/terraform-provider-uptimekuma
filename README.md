@@ -132,4 +132,4 @@ Change `templates/` and `examples/`, then run `make docs`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache — see [LICENSE](LICENSE).
