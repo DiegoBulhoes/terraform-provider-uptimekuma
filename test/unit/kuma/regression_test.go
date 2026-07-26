@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -533,5 +534,98 @@ type silentSession struct{}
 
 func (s *silentSession) Emit(_ any, _ ...any) error { return nil }
 func (s *silentSession) Close() error               { return nil }
+
+// A reconnect must not tear a session down while a call is still waiting on it.
+//
+// The provider forces reconnects on purpose — it is the only way to make the
+// server resend the push-only lists — and Terraform drives ten resources over
+// the one shared session, so calls in flight during a reconnect are normal. The
+// close cancels the library's client context, which drops those calls' ack
+// callbacks without a word.
+func TestAReconnectWaitsForTheCallsInFlight(t *testing.T) {
+	t.Parallel()
+
+	client := kuma.NewForHTTPTestOnly("http://127.0.0.1:1")
+	client.SetTimeoutForTest(5 * time.Second)
+	session := &slowSession{emitting: make(chan struct{})}
+	client.InjectSessionForTest(session)
+
+	called := make(chan error, 1)
+	go func() {
+		_, err := client.GetMonitor(context.Background(), 1)
+		called <- err
+	}()
+
+	<-session.emitting
+
+	// Dialing 127.0.0.1:1 fails, but only after the close this test is about.
+	reconnected := make(chan struct{})
+	go func() {
+		defer close(reconnected)
+		client.ForceReconnectForTest(context.Background())
+	}()
+
+	select {
+	case err := <-called:
+		if err != nil {
+			t.Fatalf("the call should have been acknowledged: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call never finished")
+	}
+	<-reconnected
+
+	if session.closedWhileWaiting() {
+		t.Error("the session was closed while a call was still waiting for its " +
+			"acknowledgement.\nClosing cancels the library's client context, and its " +
+			"per-ack goroutine then fires neither the ack callback nor the timeout " +
+			"one — the call is left waiting on a channel nothing will write to.")
+	}
+}
+
+// slowSession answers after a delay, and records whether it was closed before it
+// got the chance.
+type slowSession struct {
+	emitting chan struct{}
+
+	mu       sync.Mutex
+	waiting  bool
+	closedIn bool
+}
+
+func (s *slowSession) Emit(_ any, args ...any) error {
+	callback := findAckCallback(args)
+
+	s.mu.Lock()
+	s.waiting = true
+	s.mu.Unlock()
+	close(s.emitting)
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		s.mu.Lock()
+		s.waiting = false
+		s.mu.Unlock()
+		if callback != nil {
+			callback([]any{json.RawMessage(`{"ok":true,"monitor":{"id":1}}`)})
+		}
+	}()
+	return nil
+}
+
+func (s *slowSession) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.waiting {
+		s.closedIn = true
+	}
+	return nil
+}
+
+func (s *slowSession) closedWhileWaiting() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closedIn
+}
 
 func strPtr(s string) *string { return &s }

@@ -18,12 +18,37 @@ import (
 // callers get the event-specific fields (`monitorID`, `id`, `key`, `data`…)
 // without each of them repeating the plumbing. Pass a nil out to ignore the
 // payload.
+//
+// The read lock is held for the whole emit-and-wait, so a concurrent reconnect
+// waits for this call rather than cancelling its acknowledgement. It cannot be
+// held across session(), which takes the write lock, hence the two passes: dial
+// without it, then take it and check the session is still the live one.
 func (c *Client) Call(ctx context.Context, out any, event string, args ...any) error {
-	sio, err := c.session(ctx)
-	if err != nil {
-		return err
+	// Two passes at most: the second runs once a session has been established,
+	// and only loses the race if another reconnect started in between.
+	for range 2 {
+		ran, err := c.callOnLiveSession(ctx, out, event, args...)
+		if ran {
+			return err
+		}
+		if err := c.session(ctx); err != nil {
+			return err
+		}
 	}
-	return c.callWith(ctx, sio, out, event, args...)
+	return fmt.Errorf("emitting %q: %w", event, wire.ErrNotConnected)
+}
+
+// callOnLiveSession makes the call under the read lock, if there is a session to
+// make it on. ran reports whether it did.
+func (c *Client) callOnLiveSession(ctx context.Context, out any, event string, args ...any) (ran bool, err error) {
+	c.live.RLock()
+	defer c.live.RUnlock()
+
+	sio, ok := c.liveSession()
+	if !ok {
+		return false, nil
+	}
+	return true, c.callWith(ctx, sio, out, event, args...)
 }
 
 // callWith is call against an explicit session. Connection setup needs it

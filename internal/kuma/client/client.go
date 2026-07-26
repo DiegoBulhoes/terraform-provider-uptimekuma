@@ -67,6 +67,11 @@ type Client struct {
 	httpOnce   sync.Once
 	httpClient *http.Client
 
+	// live is held for reading by every call in flight and for writing by a
+	// reconnect, so a reconnect never tears a session down underneath a call.
+	// It is always taken before mu, never the other way round.
+	live sync.RWMutex
+
 	mu      sync.Mutex
 	sio     socketSession
 	cancel  context.CancelFunc
@@ -90,7 +95,7 @@ func newClient(ctx context.Context, cfg Config, skipAuth bool) (*Client, error) 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := c.session(ctx); err != nil {
+	if err := c.session(ctx); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -149,13 +154,38 @@ func (c *Client) markUnhealthy() {
 	c.mu.Unlock()
 }
 
-// session returns a live, authenticated session, reconnecting if needed.
-func (c *Client) session(ctx context.Context) (socketSession, error) {
+// liveSession returns the current session if it is usable, without dialing.
+func (c *Client) liveSession() (socketSession, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sio != nil && c.healthy {
+		return c.sio, true
+	}
+	return nil, false
+}
+
+// session makes sure there is a live, authenticated session, reconnecting if
+// there is not.
+//
+// Closing a session cancels the library's client context, and that drops the ack
+// callback of every call still waiting on it — silently, since the context branch
+// of its per-ack goroutine fires neither callback. So the reconnect takes the
+// write lock: it waits for the calls in flight to finish and keeps new ones out
+// until the replacement is up. Callers force a reconnect on purpose, to make the
+// server resend the push-only lists, and Terraform runs ten resources over this
+// one session, so calls in flight during a reconnect are the normal case.
+func (c *Client) session(ctx context.Context) error {
+	c.live.Lock()
+	defer c.live.Unlock()
+	return c.sessionLocked(ctx)
+}
+
+func (c *Client) sessionLocked(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.sio != nil && c.healthy {
-		return c.sio, nil
+		return nil
 	}
 
 	// A stale session is closed before dialing again; the cached lists are
@@ -175,7 +205,7 @@ func (c *Client) session(ctx context.Context) (socketSession, error) {
 			})
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return ctx.Err()
 			case <-time.After(wait):
 			}
 		}
@@ -185,10 +215,10 @@ func (c *Client) session(ctx context.Context) (socketSession, error) {
 			_ = c.closeLocked()
 			continue
 		}
-		return c.sio, nil
+		return nil
 	}
 
-	return nil, fmt.Errorf("connecting to %s: %w", c.cfg.Endpoint, lastErr)
+	return fmt.Errorf("connecting to %s: %w", c.cfg.Endpoint, lastErr)
 }
 
 // http returns the HTTP client used for the few reads that are not available

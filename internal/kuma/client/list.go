@@ -34,7 +34,7 @@ func (c *Client) EnsureLoaded(ctx context.Context, list wire.PushedList, refresh
 	} else {
 		// No getter exists, so force a reconnect and let afterLogin resend.
 		c.markUnhealthy()
-		if _, err := c.session(ctx); err != nil {
+		if err := c.session(ctx); err != nil {
 			return err
 		}
 	}

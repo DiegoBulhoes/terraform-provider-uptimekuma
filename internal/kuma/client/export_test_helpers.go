@@ -68,6 +68,13 @@ func (c *Client) InjectSessionForTest(session SessionForTest) {
 	// No cached token: seeding one would send every test down loginByToken.
 }
 
+// ForceReconnectForTest drops the session and dials again, the way EnsureLoaded
+// does to make the server resend a push-only list.
+func (c *Client) ForceReconnectForTest(ctx context.Context) {
+	c.markUnhealthy()
+	_ = c.session(ctx)
+}
+
 func (c *Client) IsHealthyForTest() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
