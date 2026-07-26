@@ -100,6 +100,11 @@ resource "uptimekuma_maintenance" "weekly" {
   weekdays    = [2, 4]
   start_time  = "01:00"
   end_time    = "03:00"
+
+  # Only to fix the order the two are created in. Without it Terraform creates
+  # them at the same time, whichever the server inserts first takes the lower
+  # ID, and the assertions below land on whichever won that race.
+  depends_on = [uptimekuma_maintenance.manual]
 }
 
 resource "uptimekuma_api_key" "reader" {
@@ -116,7 +121,8 @@ data "uptimekuma_api_keys" "all" {
 `,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("data.uptimekuma_maintenances.all", "maintenances.#", "2"),
-					// Ordered by ID, so the manual one comes first.
+					// Ordered by ID, and the depends_on above makes the manual one
+					// the first created, so it holds the lower ID.
 					resource.TestCheckResourceAttr("data.uptimekuma_maintenances.all", "maintenances.0.title", "acc-ds-manual"),
 					resource.TestCheckResourceAttr("data.uptimekuma_maintenances.all", "maintenances.0.strategy", "manual"),
 					resource.TestCheckResourceAttrSet("data.uptimekuma_maintenances.all", "maintenances.0.status"),
