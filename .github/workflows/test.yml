@@ -139,3 +139,46 @@ jobs:
           files: coverage.out
           flags: acceptance
           fail_ci_if_error: false
+
+  # Neither suite reaches the threshold alone, and neither is meant to: the unit
+  # tests cover the branches a server will not produce on demand, and the
+  # acceptance tests cover the wire format. `go tool covdata` merges the two, and
+  # the merged number is the one the project holds to.
+  #
+  # This runs the acceptance suite a second time rather than reusing the profiles
+  # from the job above, which would mean passing binary coverage directories
+  # between jobs as artifacts for one number. One extra run of the newest version
+  # is the cheaper trade, and it makes the job identical to `make coverage` locally.
+  coverage:
+    name: Coverage Gate
+    runs-on: ubuntu-latest
+    needs: [unit]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Measure and enforce combined coverage
+        env:
+          UPTIME_KUMA_IMAGE: "louislam/uptime-kuma:2.4.0"
+        run: make coverage
+
+      - name: Show the least covered functions
+        if: failure()
+        run: make coverage-gaps
+
+      - name: Upload the HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.out
+            coverage.html
+          retention-days: 14

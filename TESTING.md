@@ -142,12 +142,27 @@ Compare what `getMonitor` returns against what the model writes.
 
 ## Coverage
 
+**The project requires combined coverage above 95%.** `make coverage` measures it and fails below that; the CI has a job that does the same.
+
 ```bash
-go test -race -coverpkg=./internal/... -coverprofile=coverage-unit.out ./test/unit/...
-go tool cover -func=coverage-unit.out | tail -1
-go tool cover -html=coverage-unit.out -o coverage.html
+make coverage        # both suites, merged, then checked against the minimum
+make coverage-gaps   # the 30 least covered functions, to pick the next test
 ```
 
-Most of the provider's behavior is covered by the acceptance tests rather than the unit tests, because the interesting part is the exchange with the server.
+Combined is the only number that means anything here. Neither suite reaches the threshold alone, and neither is supposed to:
 
-`make test` writes a combined profile.
+- The **acceptance tests** cover the wire format. They are the only thing that proves a payload is one the server accepts.
+
+- The **unit tests** cover what a healthy server will not produce on demand: an acknowledgement with no ID, a rejected session token, a state file that will not decode, a push that never arrives.
+
+`go tool covdata` merges the two, which is why `make coverage` writes to `-test.gocoverdir` instead of collecting a text profile per suite.
+
+### Writing for the number, and not
+
+Chasing the last few points is how coverage stops being useful. Two rules that kept it honest here:
+
+- Prefer tests that walk a registry over tests that name one resource. `TestEveryOperationStopsOnAnUndecodableModel` covers a guard in every CRUD method of every resource, and covers the next resource for free.
+
+- If a test can only be written by asserting that Go propagates an error, say what the guard prevents instead — and if nothing can be said, the guard may be the thing to change rather than the test to add.
+
+Every test in this suite that was added purely for the number is one that found a bug: the panic on a nil base context, `null` accepted as a settings document, an empty slug reaching the server as a request for no page at all.

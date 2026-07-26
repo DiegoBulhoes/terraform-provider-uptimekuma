@@ -7,7 +7,13 @@ import (
 
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/common"
 	kumadatasource "github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource"
+	apikeyds "github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource/apikey"
+	dockerhostds "github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource/dockerhost"
+	maintenanceds "github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource/maintenance"
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource/monitor"
+	notificationds "github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource/notification"
+	proxyds "github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource/proxy"
+	settingsds "github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource/settings"
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource/statuspage"
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/datasource/tag"
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
@@ -540,5 +546,240 @@ func TestEveryListDataSourceHandlesFailure(t *testing.T) {
 	}
 	if len(names) != 13 {
 		t.Errorf("found %d data sources; add coverage for the new one", len(names))
+	}
+}
+
+// TestEveryDataSourceStopsOnAnUndecodableConfig is the data source counterpart of
+// the resource guard: read the config into the model, stop if it did not decode.
+//
+// The consequence differs from a resource's. A data source that continues with a
+// zero-value model looks up the empty string or id 0, and whatever it finds — or
+// the not-found error it reports — has nothing to do with what the user asked
+// for. The mock controller has no expectations, so any lookup that still reaches
+// the client fails the test.
+func TestEveryDataSourceStopsOnAnUndecodableConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	for _, factory := range kumadatasource.All() {
+		ds := factory()
+
+		metadataResp := &fwdatasource.MetadataResponse{}
+		ds.Metadata(ctx, fwdatasource.MetadataRequest{ProviderTypeName: "uptimekuma"}, metadataResp)
+
+		t.Run(metadataResp.TypeName, func(t *testing.T) {
+			t.Parallel()
+
+			schemaResp := fwdatasource.SchemaResponse{}
+			ds.Schema(ctx, fwdatasource.SchemaRequest{}, &schemaResp)
+			if schemaResp.Diagnostics.HasError() {
+				t.Fatalf("schema: %s", schemaResp.Diagnostics)
+			}
+
+			objectType, ok := schemaResp.Schema.Type().TerraformType(ctx).(tftypes.Object)
+			if !ok {
+				t.Fatal("a data source schema is always an object")
+			}
+
+			// Pick any string attribute and hand over a boolean instead. Data sources
+			// have no common attribute the way resources all have id, so the first
+			// string in the schema stands in.
+			var target string
+			for name, attributeType := range objectType.AttributeTypes {
+				if attributeType.Is(tftypes.String) {
+					target = name
+					break
+				}
+			}
+			if target == "" {
+				t.Skip("no string attribute to mistype")
+			}
+
+			mistyped := tftypes.Object{AttributeTypes: map[string]tftypes.Type{}}
+			attributes := map[string]tftypes.Value{}
+			for name, attributeType := range objectType.AttributeTypes {
+				if name == target {
+					mistyped.AttributeTypes[name] = tftypes.Bool
+					attributes[name] = tftypes.NewValue(tftypes.Bool, true)
+					continue
+				}
+				mistyped.AttributeTypes[name] = attributeType
+				attributes[name] = tftypes.NewValue(attributeType, nil)
+			}
+			raw := tftypes.NewValue(mistyped, attributes)
+
+			client := mocks.NewMockKumaClient(gomock.NewController(t))
+			// The two singletons take no input at all, so they have nothing to decode
+			// before fetching: they read the server first and only then write state.
+			// For them the malformed value has to be caught on the way out instead.
+			switch metadataResp.TypeName {
+			case "uptimekuma_info":
+				client.EXPECT().Info().Return(kuma.ServerInfo{Version: "2.4.0"}).AnyTimes()
+			case "uptimekuma_settings":
+				client.EXPECT().GetSettings(gomock.Any()).Return(map[string]any{}, nil).AnyTimes()
+			}
+
+			fresh := factory()
+			withConfigure, ok := fresh.(fwdatasource.DataSourceWithConfigure)
+			if !ok {
+				t.Fatal("every data source needs Configure")
+			}
+			configureResp := &fwdatasource.ConfigureResponse{}
+			withConfigure.Configure(ctx, fwdatasource.ConfigureRequest{ProviderData: client}, configureResp)
+			if configureResp.Diagnostics.HasError() {
+				t.Fatalf("configure: %s", configureResp.Diagnostics)
+			}
+
+			resp := &fwdatasource.ReadResponse{
+				State: tfsdk.State{Schema: schemaResp.Schema, Raw: raw},
+			}
+			fresh.Read(ctx, fwdatasource.ReadRequest{
+				Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: raw},
+			}, resp)
+
+			switch metadataResp.TypeName {
+			case "uptimekuma_info", "uptimekuma_settings":
+				// These two take no arguments, so there is no config to decode and
+				// nothing for a malformed one to break. Asserting they still succeed
+				// pins that down: adding an input attribute to either would need the
+				// guard, and this test would then fail and say so.
+				if resp.Diagnostics.HasError() {
+					t.Errorf("%s takes no input, so a malformed config should not affect "+
+						"it: %s", metadataResp.TypeName, resp.Diagnostics)
+				}
+			default:
+				if !resp.Diagnostics.HasError() {
+					t.Errorf("%s continued with a config it could not decode; the lookup "+
+						"would be for an empty value", metadataResp.TypeName)
+				}
+			}
+		})
+	}
+}
+
+// TestEveryListDataSourceReportsAFailedFetch covers the error path of the
+// remaining list data sources, which all have the same shape: one client call,
+// sorted output.
+//
+// Reporting an empty list instead of the failure would be the damaging outcome. A
+// data source feeds other resources' configuration — a for_each over
+// uptimekuma_notifications, say — and an empty result reads as "these were all
+// deleted", which plans the destruction of everything downstream.
+func TestEveryListDataSourceReportsAFailedFetch(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		factory func() fwdatasource.DataSource
+		expect  func(*mocks.MockKumaClient)
+	}{
+		"notifications": {
+			factory: notificationds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListNotifications(gomock.Any()).Return(nil, kuma.ErrTimeout)
+			},
+		},
+		"proxies": {
+			factory: proxyds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListProxies(gomock.Any()).Return(nil, kuma.ErrTimeout)
+			},
+		},
+		"docker hosts": {
+			factory: dockerhostds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListDockerHosts(gomock.Any()).Return(nil, kuma.ErrTimeout)
+			},
+		},
+		"api keys": {
+			factory: apikeyds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListAPIKeys(gomock.Any()).Return(nil, kuma.ErrTimeout)
+			},
+		},
+		"maintenances": {
+			factory: maintenanceds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListMaintenances(gomock.Any()).Return(nil, kuma.ErrTimeout)
+			},
+		},
+		"settings": {
+			factory: settingsds.New,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().GetSettings(gomock.Any()).Return(nil, kuma.ErrTimeout)
+			},
+		},
+	}
+
+	for name, tt := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			client := mocks.NewMockKumaClient(gomock.NewController(t))
+			tt.expect(client)
+
+			d := configure(t, tt.factory, client)
+			if errs := d.read(t, nil); errs == "" {
+				t.Error("a failed fetch must surface: an empty list would look like " +
+					"everything was deleted")
+			}
+		})
+	}
+}
+
+// TestListDataSourcesSucceedOnAnEmptyServer is the counterpart. An instance with
+// nothing configured yet is not an error, and treating it as one would make the
+// data source unusable in a configuration that creates the objects it reads.
+func TestListDataSourcesSucceedOnAnEmptyServer(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		factory func() fwdatasource.DataSource
+		expect  func(*mocks.MockKumaClient)
+	}{
+		"notifications": {
+			factory: notificationds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListNotifications(gomock.Any()).Return(map[int]kuma.Notification{}, nil)
+			},
+		},
+		"proxies": {
+			factory: proxyds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListProxies(gomock.Any()).Return(map[int]kuma.Proxy{}, nil)
+			},
+		},
+		"docker hosts": {
+			factory: dockerhostds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListDockerHosts(gomock.Any()).Return(map[int]kuma.DockerHost{}, nil)
+			},
+		},
+		"api keys": {
+			factory: apikeyds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListAPIKeys(gomock.Any()).Return(map[int]kuma.APIKey{}, nil)
+			},
+		},
+		"maintenances": {
+			factory: maintenanceds.NewList,
+			expect: func(c *mocks.MockKumaClient) {
+				c.EXPECT().ListMaintenances(gomock.Any()).Return(map[int]kuma.Maintenance{}, nil)
+			},
+		},
+	}
+
+	for name, tt := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			client := mocks.NewMockKumaClient(gomock.NewController(t))
+			tt.expect(client)
+
+			d := configure(t, tt.factory, client)
+			if errs := d.read(t, nil); errs != "" {
+				t.Errorf("an empty server is not an error: %s", errs)
+			}
+		})
 	}
 }

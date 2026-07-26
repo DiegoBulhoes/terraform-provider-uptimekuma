@@ -17,6 +17,8 @@ make docs         # Generate and validate docs with tfplugindocs
 make fmt          # gofmt + goimports
 make security     # govulncheck
 make ci           # The CI checks and unit tests, without changing files
+make coverage     # Both suites merged; fails below 95%
+make coverage-gaps # The least covered functions, to pick the next test
 ```
 
 Run a single unit test:
@@ -131,6 +133,12 @@ Wire field names come from `server/model/monitor.js` (`toJSON`). **That format m
 - `test/integration/kuma` exercises the client directly, and is the first thing to run when something breaks.
 
 - Mock generation: `go tool mockgen -destination=test/mocks/mock_client.go -package=mocks github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/common KumaClient`
+
+- Several tests walk a registry (`resource.All()`, `provider.Resources()`) instead of naming resources one by one, so a resource added later is covered without anyone remembering to add it. `TestEveryMonitorTypeRoundTripsItsAttributes` is the important one: it drives every type's `ApplyTo`/`ReadFrom` pair and fails when the two disagree about an attribute, which is otherwise a permanent diff no compiler catches.
+
+- **Combined coverage must stay above 95%**, measured by `make coverage`, which merges the two suites with `go tool covdata`. Neither suite reaches it alone and neither should: acceptance tests cover the wire format, unit tests cover what a healthy server will not produce on demand. When adding a test for the number, prefer one that walks a registry over one that names a single resource — see `TESTING.md`.
+
+- **A panic is worse than an error here.** It kills the plugin process, and the framework reports a crash with no resource address while an operation is left half-applied. `test/unit/kuma/basecontext_test.go` covers the one instance found so far: `connectLocked` derived the connection context from `c.baseCtx`, and `context.WithCancel(nil)` panics. The guard makes it fail cleanly, and `TestEveryClientHasABaseContext` covers the root cause — no constructor may leave that field nil. Add a similar root-cause test for any panic found later, not just a guard.
 
 ## Code Style
 

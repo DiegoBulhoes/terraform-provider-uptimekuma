@@ -20,13 +20,21 @@ var (
 	pool   = make(map[string]*Client)
 )
 
+// poolKey identifies configurations that may share a session.
+//
+// The password is part of the key so that rotating it forces a fresh login
+// instead of silently reusing a session opened with the old credentials.
+// insecure_skip_verify is too: a caller that stopped accepting self-signed
+// certificates must not be handed a session established while it did.
+func poolKey(cfg Config) string {
+	return fmt.Sprintf("%s|%s|%s|%t", cfg.Endpoint, cfg.Username, cfg.Password, cfg.InsecureSkipVerify)
+}
+
 // Shared returns a client for the given configuration, reusing an existing
 // session when one was already opened for the same endpoint and user in this
 // process.
 func Shared(ctx context.Context, cfg Config) (*Client, error) {
-	// The password is part of the key so that rotating it forces a fresh login
-	// instead of silently reusing a session opened with the old credentials.
-	key := fmt.Sprintf("%s|%s|%s|%t", cfg.Endpoint, cfg.Username, cfg.Password, cfg.InsecureSkipVerify)
+	key := poolKey(cfg)
 
 	poolMu.Lock()
 	defer poolMu.Unlock()

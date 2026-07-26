@@ -99,7 +99,8 @@ func (c *Client) InjectSessionForTest(session SessionForTest) {
 	defer c.mu.Unlock()
 	c.sio = session
 	c.healthy = true
-	c.jwt = "test-token"
+	// Deliberately no cached token: seeding one would make every test take the
+	// loginByToken path. Tests that want it call SetTokenForTest.
 }
 
 // IsHealthyForTest reports whether the client still trusts its session. Several
@@ -198,4 +199,26 @@ func (c *Client) SetSkipAuthForTest(skip bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.skipAuth = skip
+}
+
+// PoolKeyForTest exposes the key Shared uses to decide whether two
+// configurations can share one authenticated session. What it includes is a
+// correctness question, not an optimization: a key that ignored the password
+// would hand back a session opened with credentials the caller no longer has.
+func PoolKeyForTest(cfg Config) string { return poolKey(cfg) }
+
+// SeedPoolForTest puts a client in the shared pool under the given config, as a
+// successful first connection would, so reuse can be observed without dialing.
+func SeedPoolForTest(cfg Config, client *Client) {
+	poolMu.Lock()
+	defer poolMu.Unlock()
+	pool[poolKey(cfg)] = client
+}
+
+// ResetPoolForTest empties the pool, so one test's sessions do not leak into
+// another's.
+func ResetPoolForTest() {
+	poolMu.Lock()
+	defer poolMu.Unlock()
+	pool = make(map[string]*Client)
 }
