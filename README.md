@@ -131,6 +131,14 @@ Do not edit `docs/` by hand — it is generated.
 
 Change `templates/` and `examples/`, then run `make docs`.
 
+### Claude Code skill
+
+`.claude/skills/golang/` is a vendored copy of [DiegoBulhoes/claude](https://github.com/DiegoBulhoes/claude/tree/main/skills/development/golang), available as `/golang`.
+
+It covers layout, naming, error handling, testing, concurrency and security for Go, and includes a `references/terraform-provider.md` written for providers like this one.
+
+It is a copy, not a submodule, so update it by re-copying from upstream.
+
 > **Note on the repository name.** The Terraform Registry takes a provider's name from its repository, and `tfplugindocs` takes it from the directory name. For the resource prefix to be `uptimekuma_`, the repository has to be named **`terraform-provider-uptimekuma`**. The Go module and the `make docs` targets already use that name.
 
 ## License
