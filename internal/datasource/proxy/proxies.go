@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/common"
+	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -77,7 +78,12 @@ func (d *ListDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 }
 
 func (d *ListDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	proxies, err := d.client.ListProxies(ctx)
+	var proxies map[int]kuma.Proxy
+	err := common.RetryRPC(ctx, 3, func() error {
+		var err error
+		proxies, err = d.client.ListProxies(ctx)
+		return err
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to list proxies", err.Error())
 		return

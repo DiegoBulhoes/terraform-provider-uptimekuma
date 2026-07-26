@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/common"
+	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -114,12 +115,23 @@ func (d *DataSource) Read(ctx context.Context, req datasource.ReadRequest, resp 
 
 	slug := model.Slug.ValueString()
 
-	page, err := d.client.GetStatusPage(ctx, slug)
+	var page *kuma.StatusPage
+	err := common.RetryRPC(ctx, 3, func() error {
+		var err error
+		page, err = d.client.GetStatusPage(ctx, slug)
+		return err
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to read status page", err.Error())
 		return
 	}
-	groups, err := d.client.GetStatusPageGroups(ctx, page.Slug)
+
+	var groups []kuma.StatusPageGroup
+	err = common.RetryRPC(ctx, 3, func() error {
+		var err error
+		groups, err = d.client.GetStatusPageGroups(ctx, page.Slug)
+		return err
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to read the status page's groups", err.Error())
 		return
@@ -229,7 +241,12 @@ func (d *ListDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 func (d *ListDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
 	// refresh=true: the cached list dates from login, so a page created earlier
 	// in the same run would otherwise be missing.
-	pages, err := d.client.ListStatusPages(ctx, true)
+	var pages map[int]kuma.StatusPage
+	err := common.RetryRPC(ctx, 3, func() error {
+		var err error
+		pages, err = d.client.ListStatusPages(ctx, true)
+		return err
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to list status pages", err.Error())
 		return

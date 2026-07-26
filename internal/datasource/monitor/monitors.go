@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/common"
+	"github.com/DiegoBulhoes/terraform-provider-uptimekuma/internal/kuma"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -100,7 +101,12 @@ func (d *ListDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	monitors, err := d.client.ListMonitors(ctx)
+	var monitors map[int]kuma.Monitor
+	err := common.RetryRPC(ctx, 3, func() error {
+		var err error
+		monitors, err = d.client.ListMonitors(ctx)
+		return err
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to list monitors", err.Error())
 		return

@@ -207,7 +207,7 @@ func TestMonitorLookup(t *testing.T) {
 		t.Parallel()
 
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
-		client.EXPECT().ListMonitors(gomock.Any()).Return(nil, kuma.ErrTimeout)
+		client.EXPECT().ListMonitors(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 
 		d := configure(t, monitor.New, client)
 		if errs := d.read(t, map[string]tftypes.Value{"name": str("API")}); errs == "" {
@@ -264,7 +264,7 @@ func TestMonitorList(t *testing.T) {
 		t.Parallel()
 
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
-		client.EXPECT().ListMonitors(gomock.Any()).Return(nil, kuma.ErrTimeout)
+		client.EXPECT().ListMonitors(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 
 		d := configure(t, monitor.NewList, client)
 		if errs := d.read(t, nil); errs == "" {
@@ -377,7 +377,7 @@ func TestTagLookup(t *testing.T) {
 		t.Parallel()
 
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
-		client.EXPECT().ListTags(gomock.Any()).Return(nil, kuma.ErrTimeout)
+		client.EXPECT().ListTags(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 
 		d := configure(t, tag.New, client)
 		if errs := d.read(t, map[string]tftypes.Value{"name": str("env")}); errs == "" {
@@ -420,7 +420,7 @@ func TestTagList(t *testing.T) {
 		t.Parallel()
 
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
-		client.EXPECT().ListTags(gomock.Any()).Return(nil, kuma.ErrTimeout)
+		client.EXPECT().ListTags(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 
 		d := configure(t, tag.NewList, client)
 		if errs := d.read(t, nil); errs == "" {
@@ -472,7 +472,7 @@ func TestStatusPageDataSource(t *testing.T) {
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
 		client.EXPECT().GetStatusPage(gomock.Any(), "public").
 			Return(&kuma.StatusPage{ID: 1, Slug: "public", Title: "T", Theme: "auto"}, nil)
-		client.EXPECT().GetStatusPageGroups(gomock.Any(), "public").Return(nil, kuma.ErrTimeout)
+		client.EXPECT().GetStatusPageGroups(gomock.Any(), "public").Return(nil, kuma.ErrTimeout).MinTimes(1)
 
 		d := configure(t, statuspage.New, client)
 		if errs := d.read(t, map[string]tftypes.Value{"slug": str("public")}); errs == "" {
@@ -505,7 +505,7 @@ func TestStatusPageList(t *testing.T) {
 		t.Parallel()
 
 		client := mocks.NewMockKumaClient(gomock.NewController(t))
-		client.EXPECT().ListStatusPages(gomock.Any(), true).Return(nil, kuma.ErrTimeout)
+		client.EXPECT().ListStatusPages(gomock.Any(), true).Return(nil, kuma.ErrTimeout).MinTimes(1)
 
 		d := configure(t, statuspage.NewList, client)
 		if errs := d.read(t, nil); errs == "" {
@@ -654,37 +654,37 @@ func TestEveryListDataSourceReportsAFailedFetch(t *testing.T) {
 		"notifications": {
 			factory: notificationds.NewList,
 			expect: func(c *mocks.MockKumaClient) {
-				c.EXPECT().ListNotifications(gomock.Any()).Return(nil, kuma.ErrTimeout)
+				c.EXPECT().ListNotifications(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 			},
 		},
 		"proxies": {
 			factory: proxyds.NewList,
 			expect: func(c *mocks.MockKumaClient) {
-				c.EXPECT().ListProxies(gomock.Any()).Return(nil, kuma.ErrTimeout)
+				c.EXPECT().ListProxies(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 			},
 		},
 		"docker hosts": {
 			factory: dockerhostds.NewList,
 			expect: func(c *mocks.MockKumaClient) {
-				c.EXPECT().ListDockerHosts(gomock.Any()).Return(nil, kuma.ErrTimeout)
+				c.EXPECT().ListDockerHosts(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 			},
 		},
 		"api keys": {
 			factory: apikeyds.NewList,
 			expect: func(c *mocks.MockKumaClient) {
-				c.EXPECT().ListAPIKeys(gomock.Any()).Return(nil, kuma.ErrTimeout)
+				c.EXPECT().ListAPIKeys(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 			},
 		},
 		"maintenances": {
 			factory: maintenanceds.NewList,
 			expect: func(c *mocks.MockKumaClient) {
-				c.EXPECT().ListMaintenances(gomock.Any()).Return(nil, kuma.ErrTimeout)
+				c.EXPECT().ListMaintenances(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 			},
 		},
 		"settings": {
 			factory: settingsds.New,
 			expect: func(c *mocks.MockKumaClient) {
-				c.EXPECT().GetSettings(gomock.Any()).Return(nil, kuma.ErrTimeout)
+				c.EXPECT().GetSettings(gomock.Any()).Return(nil, kuma.ErrTimeout).MinTimes(1)
 			},
 		},
 	}
@@ -757,5 +757,40 @@ func TestListDataSourcesSucceedOnAnEmptyServer(t *testing.T) {
 				t.Errorf("an empty server is not an error: %s", errs)
 			}
 		})
+	}
+}
+
+// A data source read retries a transient failure, as a resource read does.
+//
+// Without this the two disagree: a forced reconnect, or any other transient
+// failure, ends a resource operation in a retry and a data source read in a hard
+// error. The counts here are the RetryRPC contract — three attempts — so dropping
+// the wrapper leaves exactly one call and fails.
+func TestAListDataSourceRetriesATransientFailure(t *testing.T) {
+	t.Parallel()
+
+	client := mocks.NewMockKumaClient(gomock.NewController(t))
+	client.EXPECT().ListNotifications(gomock.Any()).
+		Return(nil, kuma.ErrTimeout).
+		Times(3)
+
+	d := configure(t, notificationds.NewList, client)
+	if errs := d.read(t, nil); errs == "" {
+		t.Error("the failure should still surface once the retries are spent")
+	}
+}
+
+// A rejection is not retried: replaying it would fail the same way.
+func TestAListDataSourceDoesNotRetryARejection(t *testing.T) {
+	t.Parallel()
+
+	client := mocks.NewMockKumaClient(gomock.NewController(t))
+	client.EXPECT().ListNotifications(gomock.Any()).
+		Return(nil, &kuma.APIError{Event: "notificationList", Msg: "nope"}).
+		Times(1)
+
+	d := configure(t, notificationds.NewList, client)
+	if errs := d.read(t, nil); errs == "" {
+		t.Error("expected a diagnostic")
 	}
 }

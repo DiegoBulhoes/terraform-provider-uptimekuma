@@ -83,7 +83,12 @@ func (d *DataSource) Read(ctx context.Context, req datasource.ReadRequest, resp 
 		return
 	}
 
-	tags, err := d.client.ListTags(ctx)
+	var tags []kuma.Tag
+	err := common.RetryRPC(ctx, 3, func() error {
+		var err error
+		tags, err = d.client.ListTags(ctx)
+		return err
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to list tags", err.Error())
 		return

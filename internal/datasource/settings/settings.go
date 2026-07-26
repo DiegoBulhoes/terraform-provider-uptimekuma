@@ -59,7 +59,12 @@ func (d *DataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp 
 }
 
 func (d *DataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
-	settings, err := d.client.GetSettings(ctx)
+	var settings map[string]any
+	err := common.RetryRPC(ctx, 3, func() error {
+		var err error
+		settings, err = d.client.GetSettings(ctx)
+		return err
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to read settings", err.Error())
 		return

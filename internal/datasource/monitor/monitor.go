@@ -145,12 +145,15 @@ func (d *DataSource) Read(ctx context.Context, req datasource.ReadRequest, resp 
 		if !ok {
 			return
 		}
-		found, err := d.client.GetMonitor(ctx, id)
+		err := common.RetryRPC(ctx, 3, func() error {
+			var err error
+			monitor, err = d.client.GetMonitor(ctx, id)
+			return err
+		})
 		if err != nil {
 			resp.Diagnostics.AddError("Unable to read monitor", err.Error())
 			return
 		}
-		monitor = found
 	} else {
 		found, err := findByName(ctx, d.client, model.Name.ValueString())
 		if err != nil {
@@ -178,7 +181,12 @@ func (d *DataSource) Read(ctx context.Context, req datasource.ReadRequest, resp 
 // findByName resolves a monitor name against the pushed list, requiring
 // exactly one match so a typo cannot silently pick the wrong monitor.
 func findByName(ctx context.Context, client common.KumaClient, name string) (*kuma.Monitor, error) {
-	monitors, err := client.ListMonitors(ctx)
+	var monitors map[int]kuma.Monitor
+	err := common.RetryRPC(ctx, 3, func() error {
+		var err error
+		monitors, err = client.ListMonitors(ctx)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
